@@ -386,6 +386,28 @@ function poseResultToDetections(result, frame, scanArea) {
   });
 }
 
+function safelyDetectPoses(frame, scanArea) {
+  if (!state.poseLandmarker) return [];
+
+  try {
+    const result = state.poseLandmarker.detect(inferenceCanvas);
+    return poseResultToDetections(result, frame, scanArea);
+  } catch (error) {
+    console.warn(
+      "Automatic pose verification was disabled; continuing with person detection.",
+      error,
+    );
+    try {
+      state.poseLandmarker.close();
+    } catch {
+      // The failed task may already be closed.
+    }
+    state.poseLandmarker = null;
+    state.scanPoseDetections = [];
+    return [];
+  }
+}
+
 function getCategory(detection) {
   return detection.categories?.[0] || {
     categoryName: "",
@@ -755,9 +777,6 @@ function detectLoop(token) {
       : scanAreas[state.scanIndex % scanAreas.length];
     const frame = prepareInferenceFrame(rotation, scanArea);
     const result = state.detector.detectForVideo(inferenceCanvas, startedAt);
-    const poseResult = !state.calibration && state.poseLandmarker
-      ? state.poseLandmarker.detect(inferenceCanvas)
-      : null;
     if (!state.running || token !== state.loopToken) return;
 
     if (state.calibration) {
@@ -799,9 +818,9 @@ function detectLoop(token) {
       });
 
     state.scanDetections.push(...people);
-    state.scanPoseDetections.push(
-      ...poseResultToDetections(poseResult, frame, scanArea),
-    );
+    if (!state.calibration) {
+      state.scanPoseDetections.push(...safelyDetectPoses(frame, scanArea));
+    }
     const scanCycleComplete = state.scanIndex === 0;
     let confirmedTracks = consolidateDetections(
       state.tracks.filter((track) => track.confirmed),
@@ -842,7 +861,10 @@ function detectLoop(token) {
     }
   } catch (error) {
     console.error(error);
-    showError("Detection paused unexpectedly. Stop the camera, then start it again.");
+    showError(
+      `Detection paused: ${error?.message || "unexpected browser vision error"}. ` +
+      "Stop the camera, then start it again.",
+    );
     return;
   }
 
@@ -1077,7 +1099,7 @@ async function createDetector(vision, delegate) {
       modelAssetPath: MODEL_PATH,
       delegate,
     },
-    runningMode: "IMAGE",
+    runningMode: "VIDEO",
     scoreThreshold: 0.18,
     maxResults: 50,
     categoryAllowlist: ["person"],
@@ -1090,7 +1112,7 @@ async function createPoseLandmarker(vision, delegate) {
       modelAssetPath: POSE_MODEL_PATH,
       delegate,
     },
-    runningMode: "VIDEO",
+    runningMode: "IMAGE",
     numPoses: 10,
     minPoseDetectionConfidence: 0.25,
     minPosePresenceConfidence: 0.25,
