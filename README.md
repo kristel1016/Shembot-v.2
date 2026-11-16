@@ -7,7 +7,8 @@ tests portrait and landscape orientations, supports a user-selected detection
 area, and confirms detections across frames to reduce brief misses. Sensitivity
 is automatic: an EfficientDet person candidate is cross-checked by a lightweight
 MediaPipe pose model, while strong detections remain as a fallback when pose
-landmarks are temporarily hidden. Overlapping zoom scans improve small and
+landmarks are temporarily hidden. Pose results verify candidates but never
+create countable boxes on their own. Overlapping zoom scans improve small and
 crowded person detection. Results from a complete scan cycle are fused before
 counting, and containment-aware suppression removes nested duplicate and large
 group boxes.
