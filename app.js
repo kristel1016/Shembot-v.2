@@ -6,9 +6,10 @@ import {
 const MEDIAPIPE_WASM = "./wasm";
 const MODEL_PATH = "./efficientdet_lite0.tflite";
 const MAX_INFERENCE_DIMENSION = 416;
-const TRACK_HOLD_MS = 1200;
-const RECALIBRATE_AFTER_MS = 10000;
-const ABSOLUTE_PERSON_SCORE_FLOOR = 0.35;
+const TRACK_HOLD_MS = 2600;
+const RECALIBRATE_AFTER_MS = 4000;
+const ABSOLUTE_PERSON_SCORE_FLOOR = 0.32;
+const ORIENTATION_SAMPLES = 2;
 
 const elements = {
   camera: document.querySelector("#camera"),
@@ -74,6 +75,7 @@ const state = {
   rotation: Number(localStorage.getItem("automaticDetectionRotation")) || 0,
   calibration: null,
   lastCalibrationAt: 0,
+  scanIndex: 0,
   tracks: [],
   nextTrackId: 1,
   area: loadSavedArea(),
@@ -127,6 +129,7 @@ function updateAreaControls() {
 function resetTracking() {
   state.tracks = [];
   state.countHistory = [];
+  state.scanIndex = 0;
   updateCapacity(0);
 }
 
@@ -140,10 +143,10 @@ function syncCanvas() {
   elements.cameraStage.style.aspectRatio = width + " / " + height;
 }
 
-function getCrop() {
+function getCrop(areaOverride) {
   const sourceWidth = elements.camera.videoWidth;
   const sourceHeight = elements.camera.videoHeight;
-  const area = state.area || { x: 0, y: 0, width: 1, height: 1 };
+  const area = areaOverride || state.area || { x: 0, y: 0, width: 1, height: 1 };
   const x = Math.round(area.x * sourceWidth);
   const y = Math.round(area.y * sourceHeight);
   const width = Math.max(2, Math.round(area.width * sourceWidth));
@@ -156,10 +159,27 @@ function getCrop() {
   };
 }
 
-function prepareInferenceFrame(rotation) {
+function getScanAreas() {
+  const base = state.area || { x: 0, y: 0, width: 1, height: 1 };
+  const tileSize = 0.58;
+  const tileOffset = 1 - tileSize;
+  return [
+    { x: 0, y: 0 },
+    { x: tileOffset, y: 0 },
+    { x: 0, y: tileOffset },
+    { x: tileOffset, y: tileOffset },
+  ].map((tile) => ({
+    x: base.x + tile.x * base.width,
+    y: base.y + tile.y * base.height,
+    width: tileSize * base.width,
+    height: tileSize * base.height,
+  }));
+}
+
+function prepareInferenceFrame(rotation, areaOverride) {
   const sourceWidth = elements.camera.videoWidth;
   const sourceHeight = elements.camera.videoHeight;
-  const crop = getCrop();
+  const crop = getCrop(areaOverride);
   const turnsSideways = rotation === 90 || rotation === 270;
   const rotatedWidth = turnsSideways ? crop.height : crop.width;
   const rotatedHeight = turnsSideways ? crop.width : crop.height;
@@ -321,7 +341,10 @@ function orientationScore(detections, frame) {
   let score = 0;
   for (const detection of detections) {
     const category = getCategory(detection);
-    if (category.categoryName !== "person" || category.score < 0.18) continue;
+    if (
+      category.categoryName !== "person" ||
+      category.score < ABSOLUTE_PERSON_SCORE_FLOOR
+    ) continue;
     const box = detection.boundingBox;
     const aspectRatio = box.height / Math.max(1, box.width);
     const areaRatio = (box.width * box.height) / (frame.width * frame.height);
@@ -339,6 +362,7 @@ function beginOrientationCalibration() {
   state.calibration = {
     rotations,
     index: 0,
+    sampleCount: 0,
     scores: new Map(),
   };
   state.lastCalibrationAt = performance.now();
@@ -346,10 +370,15 @@ function beginOrientationCalibration() {
 
 function handleCalibrationResult(result, frame) {
   const calibration = state.calibration;
+  const previousScore = calibration.scores.get(frame.rotation) || 0;
   calibration.scores.set(
     frame.rotation,
-    orientationScore(result.detections || [], frame),
+    previousScore + orientationScore(result.detections || [], frame),
   );
+  calibration.sampleCount += 1;
+  if (calibration.sampleCount < ORIENTATION_SAMPLES) return false;
+
+  calibration.sampleCount = 0;
   calibration.index += 1;
 
   if (calibration.index < calibration.rotations.length) return false;
@@ -363,10 +392,11 @@ function handleCalibrationResult(result, frame) {
     }
   }
 
+  const rotationChanged = state.rotation !== bestRotation;
   state.rotation = bestRotation;
   localStorage.setItem("automaticDetectionRotation", String(bestRotation));
   state.calibration = null;
-  resetTracking();
+  if (rotationChanged) resetTracking();
   return true;
 }
 
@@ -410,7 +440,7 @@ function updateTracks(detections, now) {
       bestTrack.maxScore = Math.max(bestTrack.maxScore, detection.score);
       bestTrack.hits += 1;
       bestTrack.lastSeen = now;
-      const requiredHits = bestTrack.maxScore >= 0.5 ? 2 : 4;
+      const requiredHits = bestTrack.maxScore >= 0.4 ? 2 : 3;
       if (bestTrack.hits >= requiredHits) bestTrack.confirmed = true;
       unmatchedTracks.delete(bestTrack.id);
     } else {
@@ -428,7 +458,7 @@ function updateTracks(detections, now) {
 
   state.tracks = state.tracks.filter((track) => {
     const age = now - track.lastSeen;
-    return age <= (track.confirmed ? TRACK_HOLD_MS : 850);
+    return age <= TRACK_HOLD_MS;
   });
 
   return state.tracks.filter((track) => track.confirmed);
@@ -506,16 +536,22 @@ function detectLoop(token) {
     const rotation = state.calibration
       ? state.calibration.rotations[state.calibration.index]
       : state.rotation;
-    const frame = prepareInferenceFrame(rotation);
+    const scanAreas = getScanAreas();
+    const scanArea = state.calibration
+      ? state.area
+      : scanAreas[state.scanIndex % scanAreas.length];
+    const frame = prepareInferenceFrame(rotation, scanArea);
     const result = state.detector.detectForVideo(inferenceCanvas, startedAt);
     if (!state.running || token !== state.loopToken) return;
 
     if (state.calibration) {
       handleCalibrationResult(result, frame);
-      drawDetections([]);
+      drawDetections(state.tracks.filter((track) => track.confirmed));
       scheduleDetection(token);
       return;
     }
+
+    state.scanIndex = (state.scanIndex + 1) % scanAreas.length;
 
     const minimumScore = Math.max(
       ABSOLUTE_PERSON_SCORE_FLOOR,
