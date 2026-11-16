@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#07110f" />
+    <meta
+      name="description"
+      content="Private, on-device people counting from your phone camera."
+    />
+    <title>Phone Crowd Counter</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    <script
+      defer
+      src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"
+    ></script>
+    <script defer src="./app.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">COMPUTER VISION PROJECT</p>
+          <h1>Phone Crowd Counter</h1>
+        </div>
+        <div class="privacy-chip" title="Video is processed in this browser">
+          <span class="privacy-dot"></span>
+          On-device
+        </div>
+      </header>
+
+      <section class="camera-card" id="cameraCard" aria-label="Camera and detection preview">
+        <div class="camera-stage" id="cameraStage">
+          <video id="camera" autoplay muted playsinline></video>
+          <canvas id="overlay" aria-hidden="true"></canvas>
+
+          <div class="empty-state" id="emptyState">
+            <div class="lens-mark" aria-hidden="true"></div>
+            <h2>Turn your phone into the counter</h2>
+            <p>Use the rear camera, keep the phone steady, and include each person’s upper body.</p>
+          </div>
+
+          <div class="hud" id="hud" hidden>
+            <div class="count-block">
+              <span class="count-label">PEOPLE</span>
+              <strong id="countValue">0</strong>
+            </div>
+            <div class="status-block">
+              <strong id="capacityStatus">CAPACITY OK</strong>
+              <span><span id="fpsValue">0.0</span> detection FPS</span>
+            </div>
+          </div>
+
+          <div class="model-loading" id="modelLoading" role="status">
+            <span class="spinner"></span>
+            <span id="modelStatus">Preparing person detector…</span>
+          </div>
+        </div>
+
+        <div class="primary-actions">
+          <button class="primary-button" id="startButton" disabled>
+            <span class="button-icon">●</span>
+            Start camera
+          </button>
+          <button class="icon-button" id="flipButton" aria-label="Switch camera" disabled>↻</button>
+        </div>
+      </section>
+
+      <section class="controls" aria-label="Detection settings">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">ROOM SETTINGS</p>
+            <h2>Capacity barometer</h2>
+          </div>
+          <output id="capacityOutput" for="capacityInput">10 people</output>
+        </div>
+
+        <label class="range-row" for="capacityInput">
+          <span>Maximum safe capacity</span>
+          <input id="capacityInput" type="range" min="1" max="50" value="10" />
+        </label>
+
+        <details>
+          <summary>Detection sensitivity</summary>
+          <label class="range-row sensitivity" for="confidenceInput">
+            <span>Minimum confidence</span>
+            <output id="confidenceOutput" for="confidenceInput">45%</output>
+            <input id="confidenceInput" type="range" min="20" max="80" value="45" />
+          </label>
+          <p class="help-copy">Lower this when partially visible people are missed. Raise it if objects are counted as people.</p>
+        </details>
+      </section>
+
+      <section class="notes">
+        <article>
+          <span class="note-number">01</span>
+          <div>
+            <h3>Mount high and wide</h3>
+            <p>A corner view with visible upper bodies produces steadier counts than a close-up.</p>
+          </div>
+        </article>
+        <article>
+          <span class="note-number">02</span>
+          <div>
+            <h3>Nothing is uploaded</h3>
+            <p>Detection runs locally in the browser. The page does not record or transmit camera frames.</p>
+          </div>
+        </article>
+      </section>
+
+      <p class="error-message" id="errorMessage" role="alert" hidden></p>
+    </main>
+  </body>
+</html>
