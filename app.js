@@ -165,7 +165,7 @@ function getScanAreas() {
   const base = state.area || { x: 0, y: 0, width: 1, height: 1 };
   const tileSize = 0.58;
   const tileOffset = 1 - tileSize;
-  return [
+  const tiles = [
     { x: 0, y: 0 },
     { x: tileOffset, y: 0 },
     { x: 0, y: tileOffset },
@@ -175,7 +175,9 @@ function getScanAreas() {
     y: base.y + tile.y * base.height,
     width: tileSize * base.width,
     height: tileSize * base.height,
+    kind: "tile",
   }));
+  return [{ ...base, kind: "full" }, ...tiles];
 }
 
 function prepareInferenceFrame(rotation, areaOverride) {
@@ -478,7 +480,22 @@ function boxesAreDuplicate(first, second) {
 }
 
 function consolidateDetections(detections) {
-  const sorted = [...detections].sort((first, second) => second.score - first.score);
+  const dominantFullFramePeople = detections.filter(
+    (detection) =>
+      detection.fromFullScan && detection.relativeScanArea >= 0.1,
+  );
+  const prepared = detections.filter((detection) => {
+    if (detection.fromFullScan) return true;
+    return !dominantFullFramePeople.some(
+      (fullDetection) =>
+        boxArea(detection.bbox) < boxArea(fullDetection.bbox) * 0.85 &&
+        centerIsInside(detection.bbox, fullDetection.bbox),
+    );
+  });
+  const countable = prepared.filter((detection) => !detection.edgeCropped);
+  const sorted = [...countable].sort(
+    (first, second) => second.score - first.score,
+  );
   const unique = [];
 
   for (const detection of sorted) {
@@ -488,6 +505,9 @@ function consolidateDetections(detections) {
   }
 
   return unique.filter((candidate) => {
+    if (candidate.fromFullScan && candidate.relativeScanArea >= 0.1) {
+      return true;
+    }
     const candidateArea = boxArea(candidate.bbox);
     const containedPeople = unique.filter((other) => {
       if (other === candidate) return false;
@@ -652,9 +672,25 @@ function detectLoop(token) {
       .filter((detection) => isPlausiblePerson(detection, frame, minimumScore))
       .map((detection) => {
         const category = getCategory(detection);
+        const bbox = mapBoxToVideo(detection.boundingBox, frame);
+        const relativeScanArea =
+          (detection.boundingBox.width * detection.boundingBox.height) /
+          Math.max(1, frame.width * frame.height);
+        const edgeMargin = Math.max(3, Math.min(frame.sourceWidth, frame.sourceHeight) * 0.015);
+        const touchesSourceEdge =
+          bbox[0] <= edgeMargin ||
+          bbox[1] <= edgeMargin ||
+          bbox[0] + bbox[2] >= frame.sourceWidth - edgeMargin ||
+          bbox[1] + bbox[3] >= frame.sourceHeight - edgeMargin;
         return {
-          bbox: mapBoxToVideo(detection.boundingBox, frame),
+          bbox,
           score: category.score,
+          fromFullScan: scanArea?.kind === "full",
+          relativeScanArea,
+          edgeCropped:
+            scanArea?.kind === "full" &&
+            relativeScanArea >= 0.18 &&
+            touchesSourceEdge,
         };
       });
 
