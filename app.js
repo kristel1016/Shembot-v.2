@@ -6,6 +6,8 @@ import {
 const MEDIAPIPE_WASM = "./wasm";
 const MODEL_PATH = "./efficientdet_lite0.tflite";
 const MAX_INFERENCE_DIMENSION = 416;
+const TRACK_HOLD_MS = 1200;
+const RECALIBRATE_AFTER_MS = 10000;
 
 const elements = {
   camera: document.querySelector("#camera"),
@@ -18,7 +20,11 @@ const elements = {
   modelStatus: document.querySelector("#modelStatus"),
   startButton: document.querySelector("#startButton"),
   flipButton: document.querySelector("#flipButton"),
-  rotateButton: document.querySelector("#rotateButton"),
+  setAreaButton: document.querySelector("#setAreaButton"),
+  clearAreaButton: document.querySelector("#clearAreaButton"),
+  areaStatus: document.querySelector("#areaStatus"),
+  zoneSelection: document.querySelector("#zoneSelection"),
+  zoneDraft: document.querySelector("#zoneDraft"),
   countValue: document.querySelector("#countValue"),
   capacityStatus: document.querySelector("#capacityStatus"),
   fpsValue: document.querySelector("#fpsValue"),
@@ -35,18 +41,50 @@ const inferenceContext = inferenceCanvas.getContext("2d", {
   desynchronized: true,
 });
 
+function loadSavedArea() {
+  try {
+    const value = JSON.parse(localStorage.getItem("detectionArea"));
+    if (
+      value &&
+      value.x >= 0 &&
+      value.y >= 0 &&
+      value.width > 0.08 &&
+      value.height > 0.08 &&
+      value.x + value.width <= 1.001 &&
+      value.y + value.height <= 1.001
+    ) {
+      return value;
+    }
+  } catch {
+    // Ignore an invalid saved area.
+  }
+  return null;
+}
+
 const state = {
   detector: null,
   stream: null,
   running: false,
   facingMode: "environment",
   loopToken: 0,
-  countHistory: [],
   fpsHistory: [],
+  countHistory: [],
   lastVideoTime: -1,
-  rotation: Number(localStorage.getItem("detectionRotation")) || 0,
+  rotation: Number(localStorage.getItem("automaticDetectionRotation")) || 0,
+  calibration: null,
+  lastCalibrationAt: 0,
+  tracks: [],
+  nextTrackId: 1,
+  area: loadSavedArea(),
+  selectingArea: false,
+  dragStart: null,
+  draftArea: null,
   wakeLock: null,
 };
+
+function clamp(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
 
 function showError(message) {
   elements.errorMessage.textContent = message;
@@ -78,6 +116,19 @@ function updateCapacity(count) {
   elements.cameraCard.classList.toggle("is-alert", isAlert);
 }
 
+function updateAreaControls() {
+  elements.areaStatus.textContent = state.area
+    ? "Focused area active"
+    : "Full camera frame";
+  elements.clearAreaButton.disabled = !state.running || !state.area;
+}
+
+function resetTracking() {
+  state.tracks = [];
+  state.countHistory = [];
+  updateCapacity(0);
+}
+
 function syncCanvas() {
   const width = elements.camera.videoWidth;
   const height = elements.camera.videoHeight;
@@ -85,16 +136,36 @@ function syncCanvas() {
 
   if (elements.overlay.width !== width) elements.overlay.width = width;
   if (elements.overlay.height !== height) elements.overlay.height = height;
-  elements.cameraStage.style.aspectRatio = `${width} / ${height}`;
+  elements.cameraStage.style.aspectRatio = width + " / " + height;
 }
 
-function prepareInferenceFrame() {
+function getCrop() {
   const sourceWidth = elements.camera.videoWidth;
   const sourceHeight = elements.camera.videoHeight;
-  const turnsSideways = state.rotation === 90 || state.rotation === 270;
-  const rotatedWidth = turnsSideways ? sourceHeight : sourceWidth;
-  const rotatedHeight = turnsSideways ? sourceWidth : sourceHeight;
-  const scale = Math.min(1, MAX_INFERENCE_DIMENSION / Math.max(rotatedWidth, rotatedHeight));
+  const area = state.area || { x: 0, y: 0, width: 1, height: 1 };
+  const x = Math.round(area.x * sourceWidth);
+  const y = Math.round(area.y * sourceHeight);
+  const width = Math.max(2, Math.round(area.width * sourceWidth));
+  const height = Math.max(2, Math.round(area.height * sourceHeight));
+  return {
+    x: clamp(x, 0, sourceWidth - 1),
+    y: clamp(y, 0, sourceHeight - 1),
+    width: Math.min(width, sourceWidth - x),
+    height: Math.min(height, sourceHeight - y),
+  };
+}
+
+function prepareInferenceFrame(rotation) {
+  const sourceWidth = elements.camera.videoWidth;
+  const sourceHeight = elements.camera.videoHeight;
+  const crop = getCrop();
+  const turnsSideways = rotation === 90 || rotation === 270;
+  const rotatedWidth = turnsSideways ? crop.height : crop.width;
+  const rotatedHeight = turnsSideways ? crop.width : crop.height;
+  const scale = Math.min(
+    1,
+    MAX_INFERENCE_DIMENSION / Math.max(rotatedWidth, rotatedHeight),
+  );
   const width = Math.max(1, Math.round(rotatedWidth * scale));
   const height = Math.max(1, Math.round(rotatedHeight * scale));
 
@@ -106,24 +177,73 @@ function prepareInferenceFrame() {
   inferenceContext.fillStyle = "#000";
   inferenceContext.fillRect(0, 0, width, height);
 
-  if (state.rotation === 90) {
+  if (rotation === 90) {
     inferenceContext.translate(width, 0);
     inferenceContext.rotate(Math.PI / 2);
-    inferenceContext.drawImage(elements.camera, 0, 0, height, width);
-  } else if (state.rotation === 180) {
+    inferenceContext.drawImage(
+      elements.camera,
+      crop.x,
+      crop.y,
+      crop.width,
+      crop.height,
+      0,
+      0,
+      height,
+      width,
+    );
+  } else if (rotation === 180) {
     inferenceContext.translate(width, height);
     inferenceContext.rotate(Math.PI);
-    inferenceContext.drawImage(elements.camera, 0, 0, width, height);
-  } else if (state.rotation === 270) {
+    inferenceContext.drawImage(
+      elements.camera,
+      crop.x,
+      crop.y,
+      crop.width,
+      crop.height,
+      0,
+      0,
+      width,
+      height,
+    );
+  } else if (rotation === 270) {
     inferenceContext.translate(0, height);
     inferenceContext.rotate(-Math.PI / 2);
-    inferenceContext.drawImage(elements.camera, 0, 0, height, width);
+    inferenceContext.drawImage(
+      elements.camera,
+      crop.x,
+      crop.y,
+      crop.width,
+      crop.height,
+      0,
+      0,
+      height,
+      width,
+    );
   } else {
-    inferenceContext.drawImage(elements.camera, 0, 0, width, height);
+    inferenceContext.drawImage(
+      elements.camera,
+      crop.x,
+      crop.y,
+      crop.width,
+      crop.height,
+      0,
+      0,
+      width,
+      height,
+    );
   }
 
   inferenceContext.restore();
-  return { sourceWidth, sourceHeight, rotatedWidth, rotatedHeight, width, height };
+  return {
+    sourceWidth,
+    sourceHeight,
+    crop,
+    rotatedWidth,
+    rotatedHeight,
+    width,
+    height,
+    rotation,
+  };
 }
 
 function mapBoxToVideo(box, frame) {
@@ -131,38 +251,209 @@ function mapBoxToVideo(box, frame) {
   const rotatedY = box.originY * (frame.rotatedHeight / frame.height);
   const rotatedBoxWidth = box.width * (frame.rotatedWidth / frame.width);
   const rotatedBoxHeight = box.height * (frame.rotatedHeight / frame.height);
+  let x;
+  let y;
+  let width;
+  let height;
 
-  if (state.rotation === 90) {
-    return [
-      rotatedY,
-      frame.sourceHeight - (rotatedX + rotatedBoxWidth),
-      rotatedBoxHeight,
-      rotatedBoxWidth,
-    ];
+  if (frame.rotation === 90) {
+    x = rotatedY;
+    y = frame.crop.height - (rotatedX + rotatedBoxWidth);
+    width = rotatedBoxHeight;
+    height = rotatedBoxWidth;
+  } else if (frame.rotation === 180) {
+    x = frame.crop.width - (rotatedX + rotatedBoxWidth);
+    y = frame.crop.height - (rotatedY + rotatedBoxHeight);
+    width = rotatedBoxWidth;
+    height = rotatedBoxHeight;
+  } else if (frame.rotation === 270) {
+    x = frame.crop.width - (rotatedY + rotatedBoxHeight);
+    y = rotatedX;
+    width = rotatedBoxHeight;
+    height = rotatedBoxWidth;
+  } else {
+    x = rotatedX;
+    y = rotatedY;
+    width = rotatedBoxWidth;
+    height = rotatedBoxHeight;
   }
 
-  if (state.rotation === 180) {
-    return [
-      frame.sourceWidth - (rotatedX + rotatedBoxWidth),
-      frame.sourceHeight - (rotatedY + rotatedBoxHeight),
-      rotatedBoxWidth,
-      rotatedBoxHeight,
-    ];
-  }
-
-  if (state.rotation === 270) {
-    return [
-      frame.sourceWidth - (rotatedY + rotatedBoxHeight),
-      rotatedX,
-      rotatedBoxHeight,
-      rotatedBoxWidth,
-    ];
-  }
-
-  return [rotatedX, rotatedY, rotatedBoxWidth, rotatedBoxHeight];
+  return [
+    x + frame.crop.x,
+    y + frame.crop.y,
+    width,
+    height,
+  ];
 }
 
-function drawDetections(people, frame) {
+function getCategory(detection) {
+  return detection.categories?.[0] || {
+    categoryName: "",
+    score: 0,
+  };
+}
+
+function isPlausiblePerson(detection, frame, minimumScore) {
+  const category = getCategory(detection);
+  if (category.categoryName !== "person" || category.score < minimumScore) {
+    return false;
+  }
+
+  const box = detection.boundingBox;
+  if (!box || box.width < 4 || box.height < 4) return false;
+  const aspectRatio = box.height / Math.max(1, box.width);
+  const areaRatio = (box.width * box.height) / (frame.width * frame.height);
+
+  if (aspectRatio < 0.7 || areaRatio < 0.001 || areaRatio > 0.55) {
+    return false;
+  }
+
+  // Low-confidence horizontal boxes are commonly animals, furniture, or shadows.
+  if (category.score < 0.38 && aspectRatio < 0.9) {
+    return false;
+  }
+
+  return true;
+}
+
+function orientationScore(detections, frame) {
+  let score = 0;
+  for (const detection of detections) {
+    const category = getCategory(detection);
+    if (category.categoryName !== "person" || category.score < 0.18) continue;
+    const box = detection.boundingBox;
+    const aspectRatio = box.height / Math.max(1, box.width);
+    const areaRatio = (box.width * box.height) / (frame.width * frame.height);
+    if (aspectRatio >= 0.65 && areaRatio >= 0.001 && areaRatio <= 0.55) {
+      score += category.score * clamp(aspectRatio, 0.8, 2.2);
+    }
+  }
+  return score;
+}
+
+function beginOrientationCalibration() {
+  if (!state.running) return;
+  const rotations = [state.rotation, 0, 90, 180, 270]
+    .filter((value, index, values) => values.indexOf(value) === index);
+  state.calibration = {
+    rotations,
+    index: 0,
+    scores: new Map(),
+  };
+  state.lastCalibrationAt = performance.now();
+}
+
+function handleCalibrationResult(result, frame) {
+  const calibration = state.calibration;
+  calibration.scores.set(
+    frame.rotation,
+    orientationScore(result.detections || [], frame),
+  );
+  calibration.index += 1;
+
+  if (calibration.index < calibration.rotations.length) return false;
+
+  let bestRotation = state.rotation;
+  let bestScore = -1;
+  for (const [rotation, score] of calibration.scores.entries()) {
+    if (score > bestScore) {
+      bestScore = score;
+      bestRotation = rotation;
+    }
+  }
+
+  state.rotation = bestRotation;
+  localStorage.setItem("automaticDetectionRotation", String(bestRotation));
+  state.calibration = null;
+  resetTracking();
+  return true;
+}
+
+function intersectionOverUnion(first, second) {
+  const left = Math.max(first[0], second[0]);
+  const top = Math.max(first[1], second[1]);
+  const right = Math.min(first[0] + first[2], second[0] + second[2]);
+  const bottom = Math.min(first[1] + first[3], second[1] + second[3]);
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  const union =
+    first[2] * first[3] + second[2] * second[3] - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+function smoothBox(previous, next) {
+  const newWeight = 0.68;
+  return previous.map(
+    (value, index) => value * (1 - newWeight) + next[index] * newWeight,
+  );
+}
+
+function updateTracks(detections, now) {
+  const unmatchedTracks = new Set(state.tracks.map((track) => track.id));
+
+  for (const detection of detections) {
+    let bestTrack = null;
+    let bestOverlap = 0.2;
+
+    for (const track of state.tracks) {
+      if (!unmatchedTracks.has(track.id)) continue;
+      const overlap = intersectionOverUnion(track.bbox, detection.bbox);
+      if (overlap > bestOverlap) {
+        bestTrack = track;
+        bestOverlap = overlap;
+      }
+    }
+
+    if (bestTrack) {
+      bestTrack.bbox = smoothBox(bestTrack.bbox, detection.bbox);
+      bestTrack.score = detection.score;
+      bestTrack.maxScore = Math.max(bestTrack.maxScore, detection.score);
+      bestTrack.hits += 1;
+      bestTrack.lastSeen = now;
+      const requiredHits = bestTrack.maxScore >= 0.4 ? 2 : 3;
+      if (bestTrack.hits >= requiredHits) bestTrack.confirmed = true;
+      unmatchedTracks.delete(bestTrack.id);
+    } else {
+      state.tracks.push({
+        id: state.nextTrackId++,
+        bbox: detection.bbox,
+        score: detection.score,
+        maxScore: detection.score,
+        hits: 1,
+        lastSeen: now,
+        confirmed: detection.score >= 0.72,
+      });
+    }
+  }
+
+  state.tracks = state.tracks.filter((track) => {
+    const age = now - track.lastSeen;
+    return age <= (track.confirmed ? TRACK_HOLD_MS : 850);
+  });
+
+  return state.tracks.filter((track) => track.confirmed);
+}
+
+function drawArea(context) {
+  if (!state.area) return;
+  const x = state.area.x * elements.overlay.width;
+  const y = state.area.y * elements.overlay.height;
+  const width = state.area.width * elements.overlay.width;
+  const height = state.area.height * elements.overlay.height;
+
+  context.save();
+  context.beginPath();
+  context.rect(0, 0, elements.overlay.width, elements.overlay.height);
+  context.rect(x, y, width, height);
+  context.fillStyle = "rgba(0, 0, 0, 0.22)";
+  context.fill("evenodd");
+  context.setLineDash([12, 8]);
+  context.lineWidth = Math.max(2, elements.overlay.width / 300);
+  context.strokeStyle = "rgba(255, 255, 255, 0.72)";
+  context.strokeRect(x, y, width, height);
+  context.restore();
+}
+
+function drawDetections(tracks) {
   const context = elements.overlay.getContext("2d");
   context.clearRect(0, 0, elements.overlay.width, elements.overlay.height);
   const styles = getComputedStyle(document.documentElement);
@@ -171,12 +462,13 @@ function drawDetections(people, frame) {
     : styles.getPropertyValue("--green").trim();
 
   context.lineWidth = Math.max(3, elements.overlay.width / 210);
-  context.font = `700 ${Math.max(14, elements.overlay.width / 35)}px system-ui`;
+  context.font =
+    "700 " + Math.max(14, elements.overlay.width / 35) + "px system-ui";
   context.textBaseline = "top";
 
-  for (const person of people) {
-    const [x, y, width, height] = mapBoxToVideo(person.boundingBox, frame);
-    const label = `${Math.round(person.score * 100)}%`;
+  for (const track of tracks) {
+    const [x, y, width, height] = track.bbox;
+    const label = Math.round(track.score * 100) + "%";
     context.strokeStyle = color;
     context.strokeRect(x, y, width, height);
     const textWidth = context.measureText(label).width;
@@ -186,6 +478,8 @@ function drawDetections(people, frame) {
     context.fillStyle = "#031009";
     context.fillText(label, x + 6, Math.max(1, y - textHeight + 2));
   }
+
+  drawArea(context);
 }
 
 function scheduleDetection(token) {
@@ -208,34 +502,48 @@ function detectLoop(token) {
 
   try {
     syncCanvas();
-    const frame = prepareInferenceFrame();
+    const rotation = state.calibration
+      ? state.calibration.rotations[state.calibration.index]
+      : state.rotation;
+    const frame = prepareInferenceFrame(rotation);
     const result = state.detector.detectForVideo(inferenceCanvas, startedAt);
     if (!state.running || token !== state.loopToken) return;
 
+    if (state.calibration) {
+      handleCalibrationResult(result, frame);
+      drawDetections([]);
+      scheduleDetection(token);
+      return;
+    }
+
     const minimumScore = Number(elements.confidenceInput.value) / 100;
     const people = (result.detections || [])
+      .filter((detection) => isPlausiblePerson(detection, frame, minimumScore))
       .map((detection) => {
-        const category = detection.categories?.[0];
+        const category = getCategory(detection);
         return {
-          boundingBox: detection.boundingBox,
-          score: category?.score || 0,
-          categoryName: category?.categoryName || "",
+          bbox: mapBoxToVideo(detection.boundingBox, frame),
+          score: category.score,
         };
-      })
-      .filter(
-        (detection) =>
-          detection.categoryName === "person" && detection.score >= minimumScore,
-      );
+      });
 
-    state.countHistory.push(people.length);
-    if (state.countHistory.length > 4) state.countHistory.shift();
+    const confirmedTracks = updateTracks(people, startedAt);
+    state.countHistory.push(confirmedTracks.length);
+    if (state.countHistory.length > 3) state.countHistory.shift();
     updateCapacity(median(state.countHistory));
-    drawDetections(people, frame);
+    drawDetections(confirmedTracks);
 
     const inferenceFps = 1000 / Math.max(1, performance.now() - startedAt);
     state.fpsHistory.push(inferenceFps);
     if (state.fpsHistory.length > 8) state.fpsHistory.shift();
     elements.fpsValue.textContent = average(state.fpsHistory).toFixed(1);
+
+    if (
+      confirmedTracks.length === 0 &&
+      performance.now() - state.lastCalibrationAt > RECALIBRATE_AFTER_MS
+    ) {
+      beginOrientationCalibration();
+    }
   } catch (error) {
     console.error(error);
     showError("Detection paused unexpectedly. Stop the camera, then start it again.");
@@ -276,16 +584,20 @@ async function startCamera() {
     syncCanvas();
     state.running = true;
     state.loopToken += 1;
-    state.countHistory = [];
     state.fpsHistory = [];
     state.lastVideoTime = -1;
+    state.lastCalibrationAt = performance.now();
+    resetTracking();
     elements.emptyState.hidden = true;
     elements.hud.hidden = false;
     elements.flipButton.disabled = false;
-    elements.rotateButton.disabled = false;
+    elements.setAreaButton.disabled = false;
     elements.startButton.classList.add("is-running");
-    elements.startButton.innerHTML = '<span class="button-icon">■</span> Stop camera';
+    elements.startButton.innerHTML =
+      '<span class="button-icon">■</span> Stop camera';
+    updateAreaControls();
     await requestWakeLock();
+    beginOrientationCalibration();
     detectLoop(state.loopToken);
   } catch (error) {
     console.error(error);
@@ -297,12 +609,22 @@ async function startCamera() {
   }
 }
 
+function stopAreaSelection() {
+  state.selectingArea = false;
+  state.dragStart = null;
+  state.draftArea = null;
+  elements.zoneSelection.hidden = true;
+  elements.zoneSelection.classList.remove("is-dragging");
+  elements.zoneDraft.hidden = true;
+}
+
 function stopCamera() {
   state.running = false;
   state.loopToken += 1;
   state.stream?.getTracks().forEach((track) => track.stop());
   state.stream = null;
   elements.camera.srcObject = null;
+  stopAreaSelection();
   elements.overlay.getContext("2d").clearRect(
     0,
     0,
@@ -312,9 +634,11 @@ function stopCamera() {
   elements.hud.hidden = true;
   elements.emptyState.hidden = false;
   elements.flipButton.disabled = true;
-  elements.rotateButton.disabled = !state.detector;
+  elements.setAreaButton.disabled = true;
+  elements.clearAreaButton.disabled = true;
   elements.startButton.classList.remove("is-running");
-  elements.startButton.innerHTML = '<span class="button-icon">●</span> Start camera';
+  elements.startButton.innerHTML =
+    '<span class="button-icon">●</span> Start camera';
   elements.cameraCard.classList.remove("is-alert");
   state.wakeLock?.release().catch(() => {});
   state.wakeLock = null;
@@ -323,17 +647,138 @@ function stopCamera() {
 async function flipCamera() {
   const wasRunning = state.running;
   if (wasRunning) stopCamera();
-  state.facingMode = state.facingMode === "environment" ? "user" : "environment";
+  state.facingMode =
+    state.facingMode === "environment" ? "user" : "environment";
+  state.area = null;
+  localStorage.removeItem("detectionArea");
+  updateAreaControls();
   await startCamera();
 }
 
-function rotateDetection() {
-  state.rotation = (state.rotation + 90) % 360;
-  localStorage.setItem("detectionRotation", String(state.rotation));
-  elements.rotateButton.textContent = `${state.rotation}°`;
-  state.countHistory = [];
-  state.lastVideoTime = -1;
+function startAreaSelection() {
+  if (!state.running) return;
+  state.selectingArea = true;
+  elements.zoneSelection.hidden = false;
+  elements.zoneDraft.hidden = true;
 }
+
+function pointerPosition(event) {
+  const rect = elements.zoneSelection.getBoundingClientRect();
+  return {
+    x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
+    y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
+  };
+}
+
+function updateZoneDraft(area) {
+  elements.zoneDraft.hidden = false;
+  elements.zoneDraft.style.left = area.x * 100 + "%";
+  elements.zoneDraft.style.top = area.y * 100 + "%";
+  elements.zoneDraft.style.width = area.width * 100 + "%";
+  elements.zoneDraft.style.height = area.height * 100 + "%";
+}
+
+function finishAreaSelection(event) {
+  if (!state.dragStart) return;
+  const end = pointerPosition(event);
+  const area = {
+    x: Math.min(state.dragStart.x, end.x),
+    y: Math.min(state.dragStart.y, end.y),
+    width: Math.abs(end.x - state.dragStart.x),
+    height: Math.abs(end.y - state.dragStart.y),
+  };
+
+  if (area.width >= 0.08 && area.height >= 0.08) {
+    state.area = area;
+    localStorage.setItem("detectionArea", JSON.stringify(area));
+    resetTracking();
+    beginOrientationCalibration();
+  }
+
+  stopAreaSelection();
+  updateAreaControls();
+}
+
+function clearArea() {
+  state.area = null;
+  localStorage.removeItem("detectionArea");
+  resetTracking();
+  updateAreaControls();
+  beginOrientationCalibration();
+}
+
+function handleOrientationChange() {
+  window.setTimeout(() => {
+    syncCanvas();
+    resetTracking();
+    beginOrientationCalibration();
+  }, 200);
+}
+
+elements.startButton.addEventListener("click", () => {
+  if (state.running) stopCamera();
+  else startCamera();
+});
+elements.flipButton.addEventListener("click", flipCamera);
+elements.setAreaButton.addEventListener("click", startAreaSelection);
+elements.clearAreaButton.addEventListener("click", clearArea);
+elements.camera.addEventListener("loadedmetadata", syncCanvas);
+elements.camera.addEventListener("resize", handleOrientationChange);
+elements.capacityInput.addEventListener("input", () => {
+  elements.capacityOutput.textContent =
+    elements.capacityInput.value + " people";
+  updateCapacity(Number(elements.countValue.textContent));
+});
+elements.confidenceInput.addEventListener("input", () => {
+  elements.confidenceOutput.textContent =
+    elements.confidenceInput.value + "%";
+  resetTracking();
+});
+
+elements.zoneSelection.addEventListener("pointerdown", (event) => {
+  state.dragStart = pointerPosition(event);
+  state.draftArea = {
+    x: state.dragStart.x,
+    y: state.dragStart.y,
+    width: 0,
+    height: 0,
+  };
+  elements.zoneSelection.classList.add("is-dragging");
+  elements.zoneSelection.setPointerCapture(event.pointerId);
+  updateZoneDraft(state.draftArea);
+});
+elements.zoneSelection.addEventListener("pointermove", (event) => {
+  if (!state.dragStart) return;
+  const current = pointerPosition(event);
+  state.draftArea = {
+    x: Math.min(state.dragStart.x, current.x),
+    y: Math.min(state.dragStart.y, current.y),
+    width: Math.abs(current.x - state.dragStart.x),
+    height: Math.abs(current.y - state.dragStart.y),
+  };
+  updateZoneDraft(state.draftArea);
+});
+elements.zoneSelection.addEventListener("pointerup", finishAreaSelection);
+elements.zoneSelection.addEventListener("pointercancel", stopAreaSelection);
+
+window.addEventListener("resize", syncCanvas);
+window.addEventListener("orientationchange", handleOrientationChange);
+screen.orientation?.addEventListener("change", handleOrientationChange);
+
+document.addEventListener("visibilitychange", async () => {
+  if (
+    document.visibilityState === "visible" &&
+    state.running &&
+    !state.wakeLock
+  ) {
+    await requestWakeLock();
+    handleOrientationChange();
+  }
+});
+
+window.addEventListener("beforeunload", stopCamera);
+updateAreaControls();
+loadModel();
 
 async function createDetector(vision, delegate) {
   return ObjectDetector.createFromOptions(vision, {
@@ -342,7 +787,7 @@ async function createDetector(vision, delegate) {
       delegate,
     },
     runningMode: "VIDEO",
-    scoreThreshold: 0.2,
+    scoreThreshold: 0.18,
     maxResults: 50,
     categoryAllowlist: ["person"],
   });
@@ -355,7 +800,6 @@ async function loadModel() {
 
     try {
       state.detector = await createDetector(vision, "GPU");
-      elements.modelStatus.textContent = "GPU detector ready";
     } catch (gpuError) {
       console.warn("GPU detector unavailable; using CPU.", gpuError);
       elements.modelStatus.textContent = "Loading compatible detector...";
@@ -364,40 +808,11 @@ async function loadModel() {
 
     elements.modelLoading.hidden = true;
     elements.startButton.disabled = false;
-    elements.rotateButton.disabled = false;
   } catch (error) {
     console.error(error);
     elements.modelStatus.textContent = "Detector could not load";
-    showError("The detection model could not download. Check the internet connection and reload the page.");
+    showError(
+      "The detection model could not load. Check the internet connection and reload the page.",
+    );
   }
 }
-
-elements.rotateButton.textContent = `${state.rotation}°`;
-elements.startButton.addEventListener("click", () => {
-  if (state.running) stopCamera();
-  else startCamera();
-});
-elements.flipButton.addEventListener("click", flipCamera);
-elements.rotateButton.addEventListener("click", rotateDetection);
-elements.camera.addEventListener("loadedmetadata", syncCanvas);
-elements.camera.addEventListener("resize", syncCanvas);
-elements.capacityInput.addEventListener("input", () => {
-  elements.capacityOutput.textContent = `${elements.capacityInput.value} people`;
-  updateCapacity(Number(elements.countValue.textContent));
-});
-elements.confidenceInput.addEventListener("input", () => {
-  elements.confidenceOutput.textContent = `${elements.confidenceInput.value}%`;
-});
-
-window.addEventListener("resize", syncCanvas);
-window.addEventListener("orientationchange", () => window.setTimeout(syncCanvas, 150));
-screen.orientation?.addEventListener("change", () => window.setTimeout(syncCanvas, 150));
-
-document.addEventListener("visibilitychange", async () => {
-  if (document.visibilityState === "visible" && state.running && !state.wakeLock) {
-    await requestWakeLock();
-  }
-});
-
-window.addEventListener("beforeunload", stopCamera);
-loadModel();

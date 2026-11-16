@@ -58,6 +58,10 @@ button {
   margin-bottom: 18px;
 }
 
+.topbar > div:first-child {
+  min-width: 0;
+}
+
 .eyebrow {
   margin: 0 0 5px;
   color: var(--green);
@@ -140,6 +144,44 @@ canvas {
   pointer-events: none;
 }
 
+.zone-selection {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  cursor: crosshair;
+  touch-action: none;
+  background: rgba(0, 0, 0, 0.38);
+}
+
+.zone-selection span {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(88%, 330px);
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--ink);
+  background: rgba(2, 7, 5, 0.86);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-align: center;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.zone-selection.is-dragging span {
+  display: none;
+}
+
+.zone-draft {
+  position: absolute;
+  border: 3px solid var(--green);
+  border-radius: 10px;
+  background: rgba(98, 245, 172, 0.08);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
 .empty-state,
 .model-loading {
   position: absolute;
@@ -157,12 +199,18 @@ canvas {
   background-size: 24px 24px;
 }
 
+.empty-state {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .empty-state h2 {
+  max-width: 100%;
   margin: 18px 0 9px;
   font-size: 1.35rem;
 }
 
 .empty-state p {
+  width: 100%;
   max-width: 340px;
   margin-bottom: 0;
   color: var(--muted);
@@ -327,14 +375,53 @@ canvas {
   font-size: 1.45rem;
 }
 
-.rotation-button {
-  font-size: 0.82rem;
-  font-variant-numeric: tabular-nums;
-}
-
 .controls {
   margin-top: 14px;
   padding: 20px;
+}
+
+.area-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.area-controls > div:first-child {
+  display: grid;
+  gap: 4px;
+  color: #c5d6cf;
+  font-size: 0.84rem;
+}
+
+.area-controls span {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.area-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.secondary-button {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  background: #1c302a;
+  font-size: 0.76rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .section-heading output {
@@ -445,6 +532,16 @@ summary {
   .privacy-chip {
     padding: 7px 9px;
     font-size: 0.68rem;
+  }
+
+  .topbar {
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .area-controls {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
