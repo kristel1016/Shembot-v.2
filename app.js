@@ -1,10 +1,9 @@
 import {
   FilesetResolver,
   ObjectDetector,
-} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.3/vision_bundle.mjs";
+} from "./vision_bundle.mjs";
 
-const MEDIAPIPE_WASM =
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.3/wasm";
+const MEDIAPIPE_WASM = "./wasm";
 const MODEL_PATH = "./efficientdet_lite0.tflite";
 const MAX_INFERENCE_DIMENSION = 416;
 
@@ -86,7 +85,7 @@ function syncCanvas() {
 
   if (elements.overlay.width !== width) elements.overlay.width = width;
   if (elements.overlay.height !== height) elements.overlay.height = height;
-  elements.cameraStage.style.aspectRatio = \`\${width} / \${height}\`;
+  elements.cameraStage.style.aspectRatio = `${width} / ${height}`;
 }
 
 function prepareInferenceFrame() {
@@ -172,12 +171,12 @@ function drawDetections(people, frame) {
     : styles.getPropertyValue("--green").trim();
 
   context.lineWidth = Math.max(3, elements.overlay.width / 210);
-  context.font = \`700 \${Math.max(14, elements.overlay.width / 35)}px system-ui\`;
+  context.font = `700 ${Math.max(14, elements.overlay.width / 35)}px system-ui`;
   context.textBaseline = "top";
 
   for (const person of people) {
     const [x, y, width, height] = mapBoxToVideo(person.boundingBox, frame);
-    const label = \`\${Math.round(person.score * 100)}%\`;
+    const label = `${Math.round(person.score * 100)}%`;
     context.strokeStyle = color;
     context.strokeRect(x, y, width, height);
     const textWidth = context.measureText(label).width;
@@ -331,7 +330,7 @@ async function flipCamera() {
 function rotateDetection() {
   state.rotation = (state.rotation + 90) % 360;
   localStorage.setItem("detectionRotation", String(state.rotation));
-  elements.rotateButton.textContent = \`\${state.rotation}°\`;
+  elements.rotateButton.textContent = `${state.rotation}°`;
   state.countHistory = [];
   state.lastVideoTime = -1;
 }
@@ -373,7 +372,7 @@ async function loadModel() {
   }
 }
 
-elements.rotateButton.textContent = \`\${state.rotation}°\`;
+elements.rotateButton.textContent = `${state.rotation}°`;
 elements.startButton.addEventListener("click", () => {
   if (state.running) stopCamera();
   else startCamera();
@@ -383,11 +382,11 @@ elements.rotateButton.addEventListener("click", rotateDetection);
 elements.camera.addEventListener("loadedmetadata", syncCanvas);
 elements.camera.addEventListener("resize", syncCanvas);
 elements.capacityInput.addEventListener("input", () => {
-  elements.capacityOutput.textContent = \`\${elements.capacityInput.value} people\`;
+  elements.capacityOutput.textContent = `${elements.capacityInput.value} people`;
   updateCapacity(Number(elements.countValue.textContent));
 });
 elements.confidenceInput.addEventListener("input", () => {
-  elements.confidenceOutput.textContent = \`\${elements.confidenceInput.value}%\`;
+  elements.confidenceOutput.textContent = `${elements.confidenceInput.value}%`;
 });
 
 window.addEventListener("resize", syncCanvas);
