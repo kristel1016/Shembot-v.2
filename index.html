@@ -10,12 +10,7 @@
     />
     <title>Phone Crowd Counter</title>
     <link rel="stylesheet" href="./styles.css" />
-    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
-    <script
-      defer
-      src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"
-    ></script>
-    <script defer src="./app.js"></script>
+    <script type="module" src="./app.js"></script>
   </head>
   <body>
     <main class="shell">
@@ -63,7 +58,8 @@
             <span class="button-icon">●</span>
             Start camera
           </button>
-          <button class="icon-button" id="flipButton" aria-label="Switch camera" disabled>↻</button>
+          <button class="icon-button rotation-button" id="rotateButton" aria-label="Rotate detection" title="Rotate detection" disabled>0°</button>
+          <button class="icon-button" id="flipButton" aria-label="Switch camera" title="Switch camera" disabled>↻</button>
         </div>
       </section>
 
@@ -89,6 +85,7 @@
             <input id="confidenceInput" type="range" min="20" max="80" value="45" />
           </label>
           <p class="help-copy">Lower this when partially visible people are missed. Raise it if objects are counted as people.</p>
+          <p class="help-copy"><strong>Landscape or sideways?</strong> Tap the degree button beside Start camera until the boxes follow people correctly.</p>
         </details>
       </section>
 

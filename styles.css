@@ -120,7 +120,6 @@ h2 {
 .camera-stage {
   position: relative;
   width: 100%;
-  min-height: 360px;
   aspect-ratio: 4 / 3;
   overflow: hidden;
   background: #020403;
@@ -321,10 +320,16 @@ canvas {
 }
 
 .icon-button {
+  flex: 0 0 52px;
   width: 52px;
   color: var(--ink);
   background: #1c302a;
   font-size: 1.45rem;
+}
+
+.rotation-button {
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .controls {
@@ -431,10 +436,6 @@ summary {
   .shell {
     padding-left: 11px;
     padding-right: 11px;
-  }
-
-  .camera-stage {
-    min-height: 330px;
   }
 
   .notes {

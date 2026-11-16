@@ -1,3 +1,13 @@
+import {
+  FilesetResolver,
+  ObjectDetector,
+} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.3/vision_bundle.mjs";
+
+const MEDIAPIPE_WASM =
+  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.3/wasm";
+const MODEL_PATH = "./efficientdet_lite0.tflite";
+const MAX_INFERENCE_DIMENSION = 416;
+
 const elements = {
   camera: document.querySelector("#camera"),
   overlay: document.querySelector("#overlay"),
@@ -9,6 +19,7 @@ const elements = {
   modelStatus: document.querySelector("#modelStatus"),
   startButton: document.querySelector("#startButton"),
   flipButton: document.querySelector("#flipButton"),
+  rotateButton: document.querySelector("#rotateButton"),
   countValue: document.querySelector("#countValue"),
   capacityStatus: document.querySelector("#capacityStatus"),
   fpsValue: document.querySelector("#fpsValue"),
@@ -19,14 +30,22 @@ const elements = {
   errorMessage: document.querySelector("#errorMessage"),
 };
 
+const inferenceCanvas = document.createElement("canvas");
+const inferenceContext = inferenceCanvas.getContext("2d", {
+  alpha: false,
+  desynchronized: true,
+});
+
 const state = {
-  model: null,
+  detector: null,
   stream: null,
   running: false,
   facingMode: "environment",
   loopToken: 0,
   countHistory: [],
-  lastInferenceAt: performance.now(),
+  fpsHistory: [],
+  lastVideoTime: -1,
+  rotation: Number(localStorage.getItem("detectionRotation")) || 0,
   wakeLock: null,
 };
 
@@ -43,7 +62,13 @@ function clearError() {
 function median(values) {
   const sorted = [...values].sort((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+  return sorted.length % 2
+    ? sorted[middle]
+    : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
+}
+
+function average(values) {
+  return values.reduce((total, value) => total + value, 0) / values.length;
 }
 
 function updateCapacity(count) {
@@ -58,25 +83,101 @@ function syncCanvas() {
   const width = elements.camera.videoWidth;
   const height = elements.camera.videoHeight;
   if (!width || !height) return;
-  elements.overlay.width = width;
-  elements.overlay.height = height;
-  elements.cameraStage.style.aspectRatio = `${width} / ${height}`;
+
+  if (elements.overlay.width !== width) elements.overlay.width = width;
+  if (elements.overlay.height !== height) elements.overlay.height = height;
+  elements.cameraStage.style.aspectRatio = \`\${width} / \${height}\`;
 }
 
-function drawDetections(predictions) {
+function prepareInferenceFrame() {
+  const sourceWidth = elements.camera.videoWidth;
+  const sourceHeight = elements.camera.videoHeight;
+  const turnsSideways = state.rotation === 90 || state.rotation === 270;
+  const rotatedWidth = turnsSideways ? sourceHeight : sourceWidth;
+  const rotatedHeight = turnsSideways ? sourceWidth : sourceHeight;
+  const scale = Math.min(1, MAX_INFERENCE_DIMENSION / Math.max(rotatedWidth, rotatedHeight));
+  const width = Math.max(1, Math.round(rotatedWidth * scale));
+  const height = Math.max(1, Math.round(rotatedHeight * scale));
+
+  if (inferenceCanvas.width !== width) inferenceCanvas.width = width;
+  if (inferenceCanvas.height !== height) inferenceCanvas.height = height;
+
+  inferenceContext.save();
+  inferenceContext.setTransform(1, 0, 0, 1, 0, 0);
+  inferenceContext.fillStyle = "#000";
+  inferenceContext.fillRect(0, 0, width, height);
+
+  if (state.rotation === 90) {
+    inferenceContext.translate(width, 0);
+    inferenceContext.rotate(Math.PI / 2);
+    inferenceContext.drawImage(elements.camera, 0, 0, height, width);
+  } else if (state.rotation === 180) {
+    inferenceContext.translate(width, height);
+    inferenceContext.rotate(Math.PI);
+    inferenceContext.drawImage(elements.camera, 0, 0, width, height);
+  } else if (state.rotation === 270) {
+    inferenceContext.translate(0, height);
+    inferenceContext.rotate(-Math.PI / 2);
+    inferenceContext.drawImage(elements.camera, 0, 0, height, width);
+  } else {
+    inferenceContext.drawImage(elements.camera, 0, 0, width, height);
+  }
+
+  inferenceContext.restore();
+  return { sourceWidth, sourceHeight, rotatedWidth, rotatedHeight, width, height };
+}
+
+function mapBoxToVideo(box, frame) {
+  const rotatedX = box.originX * (frame.rotatedWidth / frame.width);
+  const rotatedY = box.originY * (frame.rotatedHeight / frame.height);
+  const rotatedBoxWidth = box.width * (frame.rotatedWidth / frame.width);
+  const rotatedBoxHeight = box.height * (frame.rotatedHeight / frame.height);
+
+  if (state.rotation === 90) {
+    return [
+      rotatedY,
+      frame.sourceHeight - (rotatedX + rotatedBoxWidth),
+      rotatedBoxHeight,
+      rotatedBoxWidth,
+    ];
+  }
+
+  if (state.rotation === 180) {
+    return [
+      frame.sourceWidth - (rotatedX + rotatedBoxWidth),
+      frame.sourceHeight - (rotatedY + rotatedBoxHeight),
+      rotatedBoxWidth,
+      rotatedBoxHeight,
+    ];
+  }
+
+  if (state.rotation === 270) {
+    return [
+      frame.sourceWidth - (rotatedY + rotatedBoxHeight),
+      rotatedX,
+      rotatedBoxHeight,
+      rotatedBoxWidth,
+    ];
+  }
+
+  return [rotatedX, rotatedY, rotatedBoxWidth, rotatedBoxHeight];
+}
+
+function drawDetections(people, frame) {
   const context = elements.overlay.getContext("2d");
   context.clearRect(0, 0, elements.overlay.width, elements.overlay.height);
-  const alertColor = getComputedStyle(document.documentElement).getPropertyValue("--red").trim();
-  const normalColor = getComputedStyle(document.documentElement).getPropertyValue("--green").trim();
-  const color = elements.cameraCard.classList.contains("is-alert") ? alertColor : normalColor;
+  const styles = getComputedStyle(document.documentElement);
+  const color = elements.cameraCard.classList.contains("is-alert")
+    ? styles.getPropertyValue("--red").trim()
+    : styles.getPropertyValue("--green").trim();
 
   context.lineWidth = Math.max(3, elements.overlay.width / 210);
-  context.font = `700 ${Math.max(14, elements.overlay.width / 35)}px system-ui`;
+  context.font = \`700 \${Math.max(14, elements.overlay.width / 35)}px system-ui\`;
   context.textBaseline = "top";
 
-  for (const prediction of predictions) {
-    const [x, y, width, height] = prediction.bbox;
-    const label = `${Math.round(prediction.score * 100)}%`;
+  for (const person of people) {
+    const [x, y, width, height] = mapBoxToVideo(person.boundingBox, frame);
+    const label = \`\${Math.round(person.score * 100)}%\`;
     context.strokeStyle = color;
     context.strokeRect(x, y, width, height);
     const textWidth = context.measureText(label).width;
@@ -88,32 +189,61 @@ function drawDetections(predictions) {
   }
 }
 
-async function detectLoop(token) {
+function scheduleDetection(token) {
+  requestAnimationFrame(() => detectLoop(token));
+}
+
+function detectLoop(token) {
   if (!state.running || token !== state.loopToken) return;
 
+  if (
+    elements.camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
+    elements.camera.currentTime === state.lastVideoTime
+  ) {
+    scheduleDetection(token);
+    return;
+  }
+
+  state.lastVideoTime = elements.camera.currentTime;
+  const startedAt = performance.now();
+
   try {
-    const minimumScore = Number(elements.confidenceInput.value) / 100;
-    const predictions = await state.model.detect(elements.camera, 30, minimumScore);
+    syncCanvas();
+    const frame = prepareInferenceFrame();
+    const result = state.detector.detectForVideo(inferenceCanvas, startedAt);
     if (!state.running || token !== state.loopToken) return;
 
-    const people = predictions.filter((prediction) => prediction.class === "person");
-    state.countHistory.push(people.length);
-    if (state.countHistory.length > 5) state.countHistory.shift();
-    const stableCount = median(state.countHistory);
-    updateCapacity(stableCount);
-    drawDetections(people);
+    const minimumScore = Number(elements.confidenceInput.value) / 100;
+    const people = (result.detections || [])
+      .map((detection) => {
+        const category = detection.categories?.[0];
+        return {
+          boundingBox: detection.boundingBox,
+          score: category?.score || 0,
+          categoryName: category?.categoryName || "",
+        };
+      })
+      .filter(
+        (detection) =>
+          detection.categoryName === "person" && detection.score >= minimumScore,
+      );
 
-    const now = performance.now();
-    const fps = 1000 / Math.max(1, now - state.lastInferenceAt);
-    state.lastInferenceAt = now;
-    elements.fpsValue.textContent = fps.toFixed(1);
+    state.countHistory.push(people.length);
+    if (state.countHistory.length > 4) state.countHistory.shift();
+    updateCapacity(median(state.countHistory));
+    drawDetections(people, frame);
+
+    const inferenceFps = 1000 / Math.max(1, performance.now() - startedAt);
+    state.fpsHistory.push(inferenceFps);
+    if (state.fpsHistory.length > 8) state.fpsHistory.shift();
+    elements.fpsValue.textContent = average(state.fpsHistory).toFixed(1);
   } catch (error) {
     console.error(error);
     showError("Detection paused unexpectedly. Stop the camera, then start it again.");
     return;
   }
 
-  requestAnimationFrame(() => detectLoop(token));
+  scheduleDetection(token);
 }
 
 async function requestWakeLock() {
@@ -128,7 +258,7 @@ async function requestWakeLock() {
 async function startCamera() {
   clearError();
   if (!navigator.mediaDevices?.getUserMedia) {
-    showError("Camera access is unavailable. Open this site directly in a current browser over HTTPS.");
+    showError("Camera access is unavailable. Open this site in a current browser over HTTPS.");
     return;
   }
 
@@ -138,6 +268,7 @@ async function startCamera() {
         facingMode: { ideal: state.facingMode },
         width: { ideal: 640 },
         height: { ideal: 480 },
+        frameRate: { ideal: 24, max: 30 },
       },
       audio: false,
     });
@@ -147,19 +278,22 @@ async function startCamera() {
     state.running = true;
     state.loopToken += 1;
     state.countHistory = [];
-    state.lastInferenceAt = performance.now();
+    state.fpsHistory = [];
+    state.lastVideoTime = -1;
     elements.emptyState.hidden = true;
     elements.hud.hidden = false;
     elements.flipButton.disabled = false;
+    elements.rotateButton.disabled = false;
     elements.startButton.classList.add("is-running");
     elements.startButton.innerHTML = '<span class="button-icon">■</span> Stop camera';
     await requestWakeLock();
     detectLoop(state.loopToken);
   } catch (error) {
     console.error(error);
-    const guidance = error?.name === "NotAllowedError"
-      ? "Camera permission was denied. Allow camera access in the browser’s site settings and try again."
-      : "The camera could not start. Close other apps using the camera, then try again.";
+    const guidance =
+      error?.name === "NotAllowedError"
+        ? "Camera permission was denied. Allow camera access in the browser's site settings and try again."
+        : "The camera could not start. Close other apps using the camera, then try again.";
     showError(guidance);
   }
 }
@@ -170,11 +304,16 @@ function stopCamera() {
   state.stream?.getTracks().forEach((track) => track.stop());
   state.stream = null;
   elements.camera.srcObject = null;
-  const context = elements.overlay.getContext("2d");
-  context.clearRect(0, 0, elements.overlay.width, elements.overlay.height);
+  elements.overlay.getContext("2d").clearRect(
+    0,
+    0,
+    elements.overlay.width,
+    elements.overlay.height,
+  );
   elements.hud.hidden = true;
   elements.emptyState.hidden = false;
   elements.flipButton.disabled = true;
+  elements.rotateButton.disabled = !state.detector;
   elements.startButton.classList.remove("is-running");
   elements.startButton.innerHTML = '<span class="button-icon">●</span> Start camera';
   elements.cameraCard.classList.remove("is-alert");
@@ -189,14 +328,44 @@ async function flipCamera() {
   await startCamera();
 }
 
+function rotateDetection() {
+  state.rotation = (state.rotation + 90) % 360;
+  localStorage.setItem("detectionRotation", String(state.rotation));
+  elements.rotateButton.textContent = \`\${state.rotation}°\`;
+  state.countHistory = [];
+  state.lastVideoTime = -1;
+}
+
+async function createDetector(vision, delegate) {
+  return ObjectDetector.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: MODEL_PATH,
+      delegate,
+    },
+    runningMode: "VIDEO",
+    scoreThreshold: 0.2,
+    maxResults: 50,
+    categoryAllowlist: ["person"],
+  });
+}
+
 async function loadModel() {
   try {
-    elements.modelStatus.textContent = "Loading mobile person detector…";
-    await tf.setBackend("webgl");
-    await tf.ready();
-    state.model = await cocoSsd.load({ base: "lite_mobilenet_v2" });
+    elements.modelStatus.textContent = "Loading fast mobile person detector...";
+    const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM);
+
+    try {
+      state.detector = await createDetector(vision, "GPU");
+      elements.modelStatus.textContent = "GPU detector ready";
+    } catch (gpuError) {
+      console.warn("GPU detector unavailable; using CPU.", gpuError);
+      elements.modelStatus.textContent = "Loading compatible detector...";
+      state.detector = await createDetector(vision, "CPU");
+    }
+
     elements.modelLoading.hidden = true;
     elements.startButton.disabled = false;
+    elements.rotateButton.disabled = false;
   } catch (error) {
     console.error(error);
     elements.modelStatus.textContent = "Detector could not load";
@@ -204,20 +373,26 @@ async function loadModel() {
   }
 }
 
+elements.rotateButton.textContent = \`\${state.rotation}°\`;
 elements.startButton.addEventListener("click", () => {
   if (state.running) stopCamera();
   else startCamera();
 });
-
 elements.flipButton.addEventListener("click", flipCamera);
+elements.rotateButton.addEventListener("click", rotateDetection);
 elements.camera.addEventListener("loadedmetadata", syncCanvas);
+elements.camera.addEventListener("resize", syncCanvas);
 elements.capacityInput.addEventListener("input", () => {
-  elements.capacityOutput.textContent = `${elements.capacityInput.value} people`;
+  elements.capacityOutput.textContent = \`\${elements.capacityInput.value} people\`;
   updateCapacity(Number(elements.countValue.textContent));
 });
 elements.confidenceInput.addEventListener("input", () => {
-  elements.confidenceOutput.textContent = `${elements.confidenceInput.value}%`;
+  elements.confidenceOutput.textContent = \`\${elements.confidenceInput.value}%\`;
 });
+
+window.addEventListener("resize", syncCanvas);
+window.addEventListener("orientationchange", () => window.setTimeout(syncCanvas, 150));
+screen.orientation?.addEventListener("change", () => window.setTimeout(syncCanvas, 150));
 
 document.addEventListener("visibilitychange", async () => {
   if (document.visibilityState === "visible" && state.running && !state.wakeLock) {
@@ -226,4 +401,4 @@ document.addEventListener("visibilitychange", async () => {
 });
 
 window.addEventListener("beforeunload", stopCamera);
-window.addEventListener("load", loadModel);
+loadModel();
