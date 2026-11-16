@@ -7,7 +7,9 @@ tests portrait and landscape orientations, supports a user-selected detection
 area, and confirms detections across frames to reduce brief misses and common
 animal/object false positives. A balanced 32% confidence floor rejects weak
 background objects, while overlapping zoom scans improve small and crowded
-person detection without adding extra inference calls per video frame.
+person detection without adding extra inference calls per video frame. Results
+from a complete scan cycle are fused before counting to suppress duplicate and
+large group boxes.
 
 The app is a static website and is ready for HTTPS hosting with GitHub Pages.
 Camera frames are processed in the browser and are not uploaded by the app.

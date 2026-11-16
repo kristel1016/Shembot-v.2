@@ -76,6 +76,7 @@ const state = {
   calibration: null,
   lastCalibrationAt: 0,
   scanIndex: 0,
+  scanDetections: [],
   tracks: [],
   nextTrackId: 1,
   area: loadSavedArea(),
@@ -122,7 +123,7 @@ function updateCapacity(count) {
 function updateAreaControls() {
   elements.areaStatus.textContent = state.area
     ? "Focused area active"
-    : "Full camera frame";
+    : "Full frame — set an area for best accuracy";
   elements.clearAreaButton.disabled = !state.running || !state.area;
 }
 
@@ -130,6 +131,7 @@ function resetTracking() {
   state.tracks = [];
   state.countHistory = [];
   state.scanIndex = 0;
+  state.scanDetections = [];
   updateCapacity(0);
 }
 
@@ -411,6 +413,93 @@ function intersectionOverUnion(first, second) {
   return union > 0 ? intersection / union : 0;
 }
 
+function boxArea(box) {
+  return Math.max(0, box[2]) * Math.max(0, box[3]);
+}
+
+function boxCenter(box) {
+  return [box[0] + box[2] / 2, box[1] + box[3] / 2];
+}
+
+function centerIsInside(innerBox, outerBox) {
+  const [x, y] = boxCenter(innerBox);
+  return (
+    x >= outerBox[0] &&
+    x <= outerBox[0] + outerBox[2] &&
+    y >= outerBox[1] &&
+    y <= outerBox[1] + outerBox[3]
+  );
+}
+
+function boxMatchScore(first, second) {
+  const overlap = intersectionOverUnion(first, second);
+  const firstCenter = boxCenter(first);
+  const secondCenter = boxCenter(second);
+  const distance = Math.hypot(
+    firstCenter[0] - secondCenter[0],
+    firstCenter[1] - secondCenter[1],
+  );
+  const smallerDiagonal = Math.max(
+    1,
+    Math.min(
+      Math.hypot(first[2], first[3]),
+      Math.hypot(second[2], second[3]),
+    ),
+  );
+  const proximity = clamp(1 - distance / (smallerDiagonal * 0.65), 0, 1);
+  if (overlap < 0.12 && proximity < 0.55) return 0;
+  return Math.max(overlap, proximity * 0.7);
+}
+
+function boxesAreDuplicate(first, second) {
+  const overlap = intersectionOverUnion(first, second);
+  if (overlap >= 0.45) return true;
+
+  const firstArea = boxArea(first);
+  const secondArea = boxArea(second);
+  const areaRatio = Math.max(firstArea, secondArea) /
+    Math.max(1, Math.min(firstArea, secondArea));
+  if (areaRatio > 5) return false;
+
+  const firstCenter = boxCenter(first);
+  const secondCenter = boxCenter(second);
+  const distance = Math.hypot(
+    firstCenter[0] - secondCenter[0],
+    firstCenter[1] - secondCenter[1],
+  );
+  const smallerDiagonal = Math.max(
+    1,
+    Math.min(
+      Math.hypot(first[2], first[3]),
+      Math.hypot(second[2], second[3]),
+    ),
+  );
+  return distance < smallerDiagonal * 0.22;
+}
+
+function consolidateDetections(detections) {
+  const sorted = [...detections].sort((first, second) => second.score - first.score);
+  const unique = [];
+
+  for (const detection of sorted) {
+    if (!unique.some((kept) => boxesAreDuplicate(kept.bbox, detection.bbox))) {
+      unique.push(detection);
+    }
+  }
+
+  return unique.filter((candidate) => {
+    const candidateArea = boxArea(candidate.bbox);
+    const containedPeople = unique.filter((other) => {
+      if (other === candidate) return false;
+      return (
+        boxArea(other.bbox) < candidateArea * 0.65 &&
+        centerIsInside(other.bbox, candidate.bbox)
+      );
+    });
+    return containedPeople.length < 2;
+  });
+}
+
 function smoothBox(previous, next) {
   const newWeight = 0.68;
   return previous.map(
@@ -423,14 +512,14 @@ function updateTracks(detections, now) {
 
   for (const detection of detections) {
     let bestTrack = null;
-    let bestOverlap = 0.2;
+    let bestScore = 0.2;
 
     for (const track of state.tracks) {
       if (!unmatchedTracks.has(track.id)) continue;
-      const overlap = intersectionOverUnion(track.bbox, detection.bbox);
-      if (overlap > bestOverlap) {
+      const score = boxMatchScore(track.bbox, detection.bbox);
+      if (score > bestScore) {
         bestTrack = track;
-        bestOverlap = overlap;
+        bestScore = score;
       }
     }
 
@@ -461,7 +550,9 @@ function updateTracks(detections, now) {
     return age <= TRACK_HOLD_MS;
   });
 
-  return state.tracks.filter((track) => track.confirmed);
+  return consolidateDetections(
+    state.tracks.filter((track) => track.confirmed),
+  );
 }
 
 function drawArea(context) {
@@ -567,10 +658,21 @@ function detectLoop(token) {
         };
       });
 
-    const confirmedTracks = updateTracks(people, startedAt);
-    state.countHistory.push(confirmedTracks.length);
-    if (state.countHistory.length > 3) state.countHistory.shift();
-    updateCapacity(median(state.countHistory));
+    state.scanDetections.push(...people);
+    const scanCycleComplete = state.scanIndex === 0;
+    let confirmedTracks = consolidateDetections(
+      state.tracks.filter((track) => track.confirmed),
+    );
+
+    if (scanCycleComplete) {
+      const fusedDetections = consolidateDetections(state.scanDetections);
+      state.scanDetections = [];
+      confirmedTracks = updateTracks(fusedDetections, startedAt);
+      state.countHistory.push(confirmedTracks.length);
+      if (state.countHistory.length > 3) state.countHistory.shift();
+      updateCapacity(median(state.countHistory));
+    }
+
     drawDetections(confirmedTracks);
 
     const inferenceFps = 1000 / Math.max(1, performance.now() - startedAt);
