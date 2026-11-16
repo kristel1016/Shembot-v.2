@@ -1,14 +1,18 @@
 import {
   FilesetResolver,
   ObjectDetector,
+  PoseLandmarker,
 } from "./vision_bundle.mjs";
 
 const MEDIAPIPE_WASM = "./wasm";
 const MODEL_PATH = "./efficientdet_lite0.tflite";
+const POSE_MODEL_PATH = "./pose_landmarker_lite.task";
 const MAX_INFERENCE_DIMENSION = 416;
 const TRACK_HOLD_MS = 2600;
 const RECALIBRATE_AFTER_MS = 4000;
-const ABSOLUTE_PERSON_SCORE_FLOOR = 0.32;
+const FULL_FRAME_SCORE_FLOOR = 0.3;
+const ZOOMED_SCORE_FLOOR = 0.25;
+const UNVERIFIED_STRONG_SCORE = 0.82;
 const ORIENTATION_SAMPLES = 2;
 
 const elements = {
@@ -32,8 +36,6 @@ const elements = {
   fpsValue: document.querySelector("#fpsValue"),
   capacityInput: document.querySelector("#capacityInput"),
   capacityOutput: document.querySelector("#capacityOutput"),
-  confidenceInput: document.querySelector("#confidenceInput"),
-  confidenceOutput: document.querySelector("#confidenceOutput"),
   errorMessage: document.querySelector("#errorMessage"),
 };
 
@@ -65,6 +67,7 @@ function loadSavedArea() {
 
 const state = {
   detector: null,
+  poseLandmarker: null,
   stream: null,
   running: false,
   facingMode: "environment",
@@ -77,6 +80,7 @@ const state = {
   lastCalibrationAt: 0,
   scanIndex: 0,
   scanDetections: [],
+  scanPoseDetections: [],
   tracks: [],
   nextTrackId: 1,
   area: loadSavedArea(),
@@ -132,6 +136,7 @@ function resetTracking() {
   state.countHistory = [];
   state.scanIndex = 0;
   state.scanDetections = [];
+  state.scanPoseDetections = [];
   updateCapacity(0);
 }
 
@@ -311,6 +316,76 @@ function mapBoxToVideo(box, frame) {
   ];
 }
 
+function mapPointToVideo(normalizedX, normalizedY, frame) {
+  const rotatedX = normalizedX * frame.rotatedWidth;
+  const rotatedY = normalizedY * frame.rotatedHeight;
+  let x;
+  let y;
+
+  if (frame.rotation === 90) {
+    x = rotatedY;
+    y = frame.crop.height - rotatedX;
+  } else if (frame.rotation === 180) {
+    x = frame.crop.width - rotatedX;
+    y = frame.crop.height - rotatedY;
+  } else if (frame.rotation === 270) {
+    x = frame.crop.width - rotatedY;
+    y = rotatedX;
+  } else {
+    x = rotatedX;
+    y = rotatedY;
+  }
+
+  return [
+    clamp(x + frame.crop.x, 0, frame.sourceWidth),
+    clamp(y + frame.crop.y, 0, frame.sourceHeight),
+  ];
+}
+
+function poseResultToDetections(result, frame, scanArea) {
+  const poses = result?.landmarks || [];
+  const coreLandmarks = new Set([0, 11, 12, 23, 24]);
+
+  return poses.flatMap((landmarks) => {
+    const visible = landmarks
+      .map((landmark, index) => ({ landmark, index }))
+      .filter(({ landmark }) =>
+        Number.isFinite(landmark.x) &&
+        Number.isFinite(landmark.y) &&
+        (landmark.visibility ?? 1) >= 0.25 &&
+        (landmark.presence ?? 1) >= 0.25
+      );
+    const visibleCoreCount = visible.filter(({ index }) =>
+      coreLandmarks.has(index)
+    ).length;
+    if (visible.length < 5 || visibleCoreCount < 2) return [];
+
+    const points = visible.map(({ landmark }) =>
+      mapPointToVideo(landmark.x, landmark.y, frame)
+    );
+    let left = Math.min(...points.map(([x]) => x));
+    let top = Math.min(...points.map(([, y]) => y));
+    let right = Math.max(...points.map(([x]) => x));
+    let bottom = Math.max(...points.map(([, y]) => y));
+    const width = Math.max(4, right - left);
+    const height = Math.max(4, bottom - top);
+    left = clamp(left - width * 0.18, 0, frame.sourceWidth);
+    right = clamp(right + width * 0.18, 0, frame.sourceWidth);
+    top = clamp(top - height * 0.12, 0, frame.sourceHeight);
+    bottom = clamp(bottom + height * 0.12, 0, frame.sourceHeight);
+
+    return [{
+      bbox: [left, top, right - left, bottom - top],
+      score: 0.99,
+      verifiedByPose: true,
+      fromFullScan: scanArea?.kind === "full",
+      relativeScanArea: ((right - left) * (bottom - top)) /
+        Math.max(1, frame.sourceWidth * frame.sourceHeight),
+      edgeCropped: false,
+    }];
+  });
+}
+
 function getCategory(detection) {
   return detection.categories?.[0] || {
     categoryName: "",
@@ -347,7 +422,7 @@ function orientationScore(detections, frame) {
     const category = getCategory(detection);
     if (
       category.categoryName !== "person" ||
-      category.score < ABSOLUTE_PERSON_SCORE_FLOOR
+      category.score < FULL_FRAME_SCORE_FLOOR
     ) continue;
     const box = detection.boundingBox;
     const aspectRatio = box.height / Math.max(1, box.width);
@@ -415,6 +490,16 @@ function intersectionOverUnion(first, second) {
   return union > 0 ? intersection / union : 0;
 }
 
+function intersectionOverSmaller(first, second) {
+  const left = Math.max(first[0], second[0]);
+  const top = Math.max(first[1], second[1]);
+  const right = Math.min(first[0] + first[2], second[0] + second[2]);
+  const bottom = Math.min(first[1] + first[3], second[1] + second[3]);
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  const smallerArea = Math.min(boxArea(first), boxArea(second));
+  return smallerArea > 0 ? intersection / smallerArea : 0;
+}
+
 function boxArea(box) {
   return Math.max(0, box[2]) * Math.max(0, box[3]);
 }
@@ -455,7 +540,9 @@ function boxMatchScore(first, second) {
 
 function boxesAreDuplicate(first, second) {
   const overlap = intersectionOverUnion(first, second);
-  if (overlap >= 0.45) return true;
+  if (overlap >= 0.45 || intersectionOverSmaller(first, second) >= 0.65) {
+    return true;
+  }
 
   const firstArea = boxArea(first);
   const secondArea = boxArea(second);
@@ -479,13 +566,22 @@ function boxesAreDuplicate(first, second) {
   return distance < smallerDiagonal * 0.22;
 }
 
+function detectionsCorrespond(first, second) {
+  return (
+    intersectionOverUnion(first.bbox, second.bbox) >= 0.1 ||
+    intersectionOverSmaller(first.bbox, second.bbox) >= 0.35 ||
+    centerIsInside(first.bbox, second.bbox) ||
+    centerIsInside(second.bbox, first.bbox)
+  );
+}
+
 function consolidateDetections(detections) {
   const dominantFullFramePeople = detections.filter(
     (detection) =>
       detection.fromFullScan && detection.relativeScanArea >= 0.1,
   );
   const prepared = detections.filter((detection) => {
-    if (detection.fromFullScan) return true;
+    if (detection.fromFullScan || detection.verifiedByPose) return true;
     return !dominantFullFramePeople.some(
       (fullDetection) =>
         boxArea(detection.bbox) < boxArea(fullDetection.bbox) * 0.85 &&
@@ -506,7 +602,13 @@ function consolidateDetections(detections) {
 
   return unique.filter((candidate) => {
     if (candidate.fromFullScan && candidate.relativeScanArea >= 0.1) {
-      return true;
+      const containedPoses = unique.filter((other) =>
+        other !== candidate &&
+        other.verifiedByPose &&
+        boxArea(other.bbox) < boxArea(candidate.bbox) * 0.72 &&
+        centerIsInside(other.bbox, candidate.bbox)
+      );
+      return containedPoses.length < 2;
     }
     const candidateArea = boxArea(candidate.bbox);
     const containedPeople = unique.filter((other) => {
@@ -653,6 +755,9 @@ function detectLoop(token) {
       : scanAreas[state.scanIndex % scanAreas.length];
     const frame = prepareInferenceFrame(rotation, scanArea);
     const result = state.detector.detectForVideo(inferenceCanvas, startedAt);
+    const poseResult = !state.calibration && state.poseLandmarker
+      ? state.poseLandmarker.detect(inferenceCanvas)
+      : null;
     if (!state.running || token !== state.loopToken) return;
 
     if (state.calibration) {
@@ -664,10 +769,9 @@ function detectLoop(token) {
 
     state.scanIndex = (state.scanIndex + 1) % scanAreas.length;
 
-    const minimumScore = Math.max(
-      ABSOLUTE_PERSON_SCORE_FLOOR,
-      Number(elements.confidenceInput.value) / 100,
-    );
+    const minimumScore = scanArea?.kind === "full"
+      ? FULL_FRAME_SCORE_FLOOR
+      : ZOOMED_SCORE_FLOOR;
     const people = (result.detections || [])
       .filter((detection) => isPlausiblePerson(detection, frame, minimumScore))
       .map((detection) => {
@@ -695,14 +799,28 @@ function detectLoop(token) {
       });
 
     state.scanDetections.push(...people);
+    state.scanPoseDetections.push(
+      ...poseResultToDetections(poseResult, frame, scanArea),
+    );
     const scanCycleComplete = state.scanIndex === 0;
     let confirmedTracks = consolidateDetections(
       state.tracks.filter((track) => track.confirmed),
     );
 
     if (scanCycleComplete) {
-      const fusedDetections = consolidateDetections(state.scanDetections);
+      const poseDetections = consolidateDetections(state.scanPoseDetections);
+      const verifiedPeople = state.poseLandmarker
+        ? state.scanDetections.filter((detection) =>
+            detection.score >= UNVERIFIED_STRONG_SCORE ||
+            poseDetections.some((pose) => detectionsCorrespond(detection, pose))
+          )
+        : state.scanDetections;
+      const fusedDetections = consolidateDetections([
+        ...verifiedPeople,
+        ...poseDetections,
+      ]);
       state.scanDetections = [];
+      state.scanPoseDetections = [];
       confirmedTracks = updateTracks(fusedDetections, startedAt);
       state.countHistory.push(confirmedTracks.length);
       if (state.countHistory.length > 3) state.countHistory.shift();
@@ -907,11 +1025,6 @@ elements.capacityInput.addEventListener("input", () => {
     elements.capacityInput.value + " people";
   updateCapacity(Number(elements.countValue.textContent));
 });
-elements.confidenceInput.addEventListener("input", () => {
-  elements.confidenceOutput.textContent =
-    elements.confidenceInput.value + "%";
-  resetTracking();
-});
 
 elements.zoneSelection.addEventListener("pointerdown", (event) => {
   state.dragStart = pointerPosition(event);
@@ -964,10 +1077,24 @@ async function createDetector(vision, delegate) {
       modelAssetPath: MODEL_PATH,
       delegate,
     },
-    runningMode: "VIDEO",
+    runningMode: "IMAGE",
     scoreThreshold: 0.18,
     maxResults: 50,
     categoryAllowlist: ["person"],
+  });
+}
+
+async function createPoseLandmarker(vision, delegate) {
+  return PoseLandmarker.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath: POSE_MODEL_PATH,
+      delegate,
+    },
+    runningMode: "VIDEO",
+    numPoses: 10,
+    minPoseDetectionConfidence: 0.25,
+    minPosePresenceConfidence: 0.25,
+    outputSegmentationMasks: false,
   });
 }
 
@@ -982,6 +1109,22 @@ async function loadModel() {
       console.warn("GPU detector unavailable; using CPU.", gpuError);
       elements.modelStatus.textContent = "Loading compatible detector...";
       state.detector = await createDetector(vision, "CPU");
+    }
+
+    elements.modelStatus.textContent = "Loading automatic person verifier...";
+    try {
+      state.poseLandmarker = await createPoseLandmarker(vision, "GPU");
+    } catch (gpuError) {
+      console.warn("GPU pose verifier unavailable; using CPU.", gpuError);
+      try {
+        state.poseLandmarker = await createPoseLandmarker(vision, "CPU");
+      } catch (poseError) {
+        console.warn(
+          "Pose verification unavailable; using detector-only fallback.",
+          poseError,
+        );
+        state.poseLandmarker = null;
+      }
     }
 
     elements.modelLoading.hidden = true;
