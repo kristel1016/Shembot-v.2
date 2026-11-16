@@ -96,10 +96,10 @@
           <summary>Detection sensitivity</summary>
           <label class="range-row sensitivity" for="confidenceInput">
             <span>Minimum confidence</span>
-            <output id="confidenceOutput" for="confidenceInput">30%</output>
-            <input id="confidenceInput" type="range" min="20" max="80" value="30" />
+            <output id="confidenceOutput" for="confidenceInput">40%</output>
+            <input id="confidenceInput" type="range" min="35" max="80" value="40" />
           </label>
-          <p class="help-copy">Lower this when partially visible people are missed. Raise it toward 40% if animals or objects are counted. New detections must also persist across frames before they are counted.</p>
+          <p class="help-copy"><strong>Strict person filter is active.</strong> Detections below 35% are always rejected. Lower this carefully when partially visible people are missed; raise it if objects are counted.</p>
           <p class="help-copy"><strong>Rotation is automatic.</strong> Keep the phone steady for a few seconds after turning it.</p>
         </details>
       </section>

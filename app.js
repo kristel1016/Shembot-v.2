@@ -8,6 +8,7 @@ const MODEL_PATH = "./efficientdet_lite0.tflite";
 const MAX_INFERENCE_DIMENSION = 416;
 const TRACK_HOLD_MS = 1200;
 const RECALIBRATE_AFTER_MS = 10000;
+const ABSOLUTE_PERSON_SCORE_FLOOR = 0.35;
 
 const elements = {
   camera: document.querySelector("#camera"),
@@ -409,7 +410,7 @@ function updateTracks(detections, now) {
       bestTrack.maxScore = Math.max(bestTrack.maxScore, detection.score);
       bestTrack.hits += 1;
       bestTrack.lastSeen = now;
-      const requiredHits = bestTrack.maxScore >= 0.4 ? 2 : 3;
+      const requiredHits = bestTrack.maxScore >= 0.5 ? 2 : 4;
       if (bestTrack.hits >= requiredHits) bestTrack.confirmed = true;
       unmatchedTracks.delete(bestTrack.id);
     } else {
@@ -516,7 +517,10 @@ function detectLoop(token) {
       return;
     }
 
-    const minimumScore = Number(elements.confidenceInput.value) / 100;
+    const minimumScore = Math.max(
+      ABSOLUTE_PERSON_SCORE_FLOOR,
+      Number(elements.confidenceInput.value) / 100,
+    );
     const people = (result.detections || [])
       .filter((detection) => isPlausiblePerson(detection, frame, minimumScore))
       .map((detection) => {
