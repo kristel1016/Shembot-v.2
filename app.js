@@ -628,8 +628,6 @@ function boxesAreDuplicate(first, second) {
 
 function detectionsCorrespond(first, second) {
   const overlap = intersectionOverUnion(first.bbox, second.bbox);
-  if (overlap >= 0.12) return true;
-
   const containment = intersectionOverSmaller(first.bbox, second.bbox);
   const firstCenter = boxCenter(first.bbox);
   const secondCenter = boxCenter(second.bbox);
@@ -638,7 +636,30 @@ function detectionsCorrespond(first, second) {
     firstCenter[1] - secondCenter[1],
   );
   const firstDiagonal = Math.max(1, Math.hypot(first.bbox[2], first.bbox[3]));
-  return containment >= 0.55 && distance <= firstDiagonal * 0.55;
+  const secondDiagonal = Math.max(1, Math.hypot(second.bbox[2], second.bbox[3]));
+  const closeEnough = distance <= Math.max(
+    firstDiagonal * 0.45,
+    secondDiagonal * 0.55,
+  );
+  return overlap >= 0.16 || (containment >= 0.65 && closeEnough);
+}
+
+function poseMatchQuality(detection, pose) {
+  if (!detectionsCorrespond(detection, pose)) return 0;
+  const overlap = intersectionOverUnion(detection.bbox, pose.bbox);
+  const containment = intersectionOverSmaller(detection.bbox, pose.bbox);
+  const detectionCenter = boxCenter(detection.bbox);
+  const poseCenter = boxCenter(pose.bbox);
+  const distance = Math.hypot(
+    detectionCenter[0] - poseCenter[0],
+    detectionCenter[1] - poseCenter[1],
+  );
+  const detectionDiagonal = Math.max(
+    1,
+    Math.hypot(detection.bbox[2], detection.bbox[3]),
+  );
+  const proximity = clamp(1 - distance / detectionDiagonal, 0, 1);
+  return overlap * 2 + containment + proximity * 0.5;
 }
 
 function consolidateDetections(detections) {
@@ -888,12 +909,27 @@ function detectLoop(token) {
             !detection.edgeCropped &&
             detection.score >= UNVERIFIED_STRONG_SCORE
           ) return [detection];
-          const isPoseVerified = poseDetections.some((pose) =>
-            detectionsCorrespond(detection, pose)
-          );
-          return isPoseVerified
-            ? [{ ...detection, edgeCropped: false, verifiedByPose: true }]
-            : [];
+          let matchingPose = null;
+          let bestMatchQuality = 0;
+          for (const pose of poseDetections) {
+            const quality = poseMatchQuality(detection, pose);
+            if (quality > bestMatchQuality) {
+              matchingPose = pose;
+              bestMatchQuality = quality;
+            }
+          }
+          if (!matchingPose) return [];
+          return [{
+            ...detection,
+            // Multiple detector windows can describe the same person. Using
+            // the matched pose box gives them one shared identity and stops
+            // a full-body, torso, and tile box from becoming three people.
+            bbox: [...matchingPose.bbox],
+            relativeScanArea: boxArea(matchingPose.bbox) /
+              Math.max(1, frame.sourceWidth * frame.sourceHeight),
+            edgeCropped: false,
+            verifiedByPose: true,
+          }];
         });
     state.scanDetections.push(...verifiedPeople);
     const scanCycleComplete = state.scanIndex === 0;
