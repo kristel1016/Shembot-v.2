@@ -417,8 +417,7 @@ canvas {
   object-fit: contain;
 }
 
-.camera-stage.is-mirrored video,
-.camera-stage.is-mirrored canvas {
+.camera-stage.is-mirrored video {
   transform: scaleX(-1);
 }
 

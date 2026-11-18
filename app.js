@@ -13,7 +13,8 @@ const RECALIBRATE_AFTER_MS = 4000;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const ZOOMED_SCORE_FLOOR = 0.25;
 const UNVERIFIED_STRONG_SCORE = 0.82;
-const POSE_VERIFICATION_INTERVAL_MS = 900;
+const POSE_VERIFICATION_INTERVAL_MS = 650;
+const POSE_CACHE_MS = 1400;
 const ORIENTATION_SAMPLES = 2;
 
 const elements = {
@@ -83,6 +84,7 @@ const state = {
   scanIndex: 0,
   scanDetections: [],
   lastPoseVerificationAt: -Infinity,
+  lastPoseDetections: [],
   tracks: [],
   nextTrackId: 1,
   area: loadSavedArea(),
@@ -139,6 +141,7 @@ function resetTracking() {
   state.scanIndex = 0;
   state.scanDetections = [];
   state.lastPoseVerificationAt = -Infinity;
+  state.lastPoseDetections = [];
   updateCapacity(0);
 }
 
@@ -375,13 +378,24 @@ function poseResultToDetections(result, frame, scanArea) {
     const leftShoulder = visibleByIndex.get(11);
     const rightShoulder = visibleByIndex.get(12);
     const hips = [visibleByIndex.get(23), visibleByIndex.get(24)].filter(Boolean);
-    if (visible.length < 8 || !leftShoulder || !rightShoulder || hips.length === 0) {
+    const visibleHeadPoints = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+      .filter((index) => visibleByIndex.has(index)).length;
+    const visibleArmPoints = [13, 14, 15, 16]
+      .filter((index) => visibleByIndex.has(index)).length;
+    if (
+      visible.length < 6 ||
+      !leftShoulder ||
+      !rightShoulder ||
+      (hips.length === 0 && visibleHeadPoints === 0 && visibleArmPoints < 2)
+    ) {
       return [];
     }
 
-    const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
-    const hipY = average(hips.map((hip) => hip.y));
-    if (hipY - shoulderY < 0.02) return [];
+    if (hips.length > 0) {
+      const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+      const hipY = average(hips.map((hip) => hip.y));
+      if (hipY - shoulderY < 0.015) return [];
+    }
 
     const points = visible.map(({ landmark }) =>
       mapPointToVideo(landmark.x, landmark.y, frame)
@@ -726,10 +740,13 @@ function updateTracks(detections, now) {
 
 function drawArea(context) {
   if (!state.area) return;
-  const x = state.area.x * elements.overlay.width;
+  const rawX = state.area.x * elements.overlay.width;
   const y = state.area.y * elements.overlay.height;
   const width = state.area.width * elements.overlay.width;
   const height = state.area.height * elements.overlay.height;
+  const x = state.mirrored
+    ? elements.overlay.width - rawX - width
+    : rawX;
 
   context.save();
   context.beginPath();
@@ -758,7 +775,10 @@ function drawDetections(tracks) {
   context.textBaseline = "top";
 
   for (const track of tracks) {
-    const [x, y, width, height] = track.bbox;
+    const [rawX, y, width, height] = track.bbox;
+    const x = state.mirrored
+      ? elements.overlay.width - rawX - width
+      : rawX;
     const label = Math.round(track.score * 100) + "%";
     context.strokeStyle = color;
     context.strokeRect(x, y, width, height);
@@ -814,8 +834,8 @@ function detectLoop(token) {
     state.scanIndex = (state.scanIndex + 1) % scanAreas.length;
 
     const minimumScore = scanArea?.kind === "full"
-      ? FULL_FRAME_SCORE_FLOOR
-      : ZOOMED_SCORE_FLOOR;
+      ? (state.poseLandmarker ? 0.26 : FULL_FRAME_SCORE_FLOOR)
+      : (state.poseLandmarker ? 0.22 : ZOOMED_SCORE_FLOOR);
     const people = (result.detections || [])
       .filter((detection) => isPlausiblePerson(detection, frame, minimumScore))
       .map((detection) => {
@@ -851,11 +871,15 @@ function detectLoop(token) {
       ) &&
       performance.now() - state.lastPoseVerificationAt >=
         POSE_VERIFICATION_INTERVAL_MS;
+    const now = performance.now();
     const poseDetections = needsPoseVerification
       ? safelyDetectPoses(frame, scanArea)
-      : [];
+      : now - state.lastPoseVerificationAt <= POSE_CACHE_MS
+        ? state.lastPoseDetections
+        : [];
     if (needsPoseVerification) {
-      state.lastPoseVerificationAt = performance.now();
+      state.lastPoseVerificationAt = now;
+      state.lastPoseDetections = poseDetections;
     }
     const verifiedPeople = !poseWasAvailable || !state.poseLandmarker
       ? people
@@ -1157,8 +1181,8 @@ async function createPoseLandmarker(vision, delegate) {
     },
     runningMode: "IMAGE",
     numPoses: 10,
-    minPoseDetectionConfidence: 0.4,
-    minPosePresenceConfidence: 0.4,
+    minPoseDetectionConfidence: 0.32,
+    minPosePresenceConfidence: 0.32,
     outputSegmentationMasks: false,
   });
 }
