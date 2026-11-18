@@ -6,8 +6,8 @@
     <meta name="theme-color" content="#eef5fb" />
     <meta name="description" content="Private, on-device people counting from your phone or laptop camera." />
     <title>Phone Crowd Counter</title>
-    <link rel="stylesheet" href="./styles.css?v=20261118-features2" />
-    <script defer src="./boot.js?v=20261118-features2"></script>
+    <link rel="stylesheet" href="./styles.css?v=20261118-strict1" />
+    <script defer src="./boot.js?v=20261118-strict1"></script>
   </head>
   <body>
     <main class="app-frame">
@@ -147,7 +147,7 @@
 
             <div class="automatic-detection">
               <span class="automatic-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m12 2 2.1 5.2L20 9l-4.5 3.7.2 5.8-3.7-2.2-3.7 2.2.2-5.8L4 9l5.9-1.8L12 2Zm0 5.4-.7 1.8-.3.7-.7.2-2 .6 1.5 1.2.6.5v.8l-.1 2 1.2-.8.5-.3.5.3 1.2.8-.1-2v-.8l.6-.5 1.5-1.2-2-.6-.7-.2-.3-.7-.7-1.8Z" /></svg></span>
-              <div><strong>Automatic person verification</strong><span>Confidence, pose checks, duplicate removal, and rotation adjust automatically.</span></div>
+              <div><strong>Strict person verification</strong><span>Every box must match a human pose when the verifier is available.</span></div>
             </div>
           </section>
         </div>
@@ -219,7 +219,7 @@
 
             <div class="history-tools">
               <div>
-                <strong>Local count history</strong>
+                <strong>Count-change history</strong>
                 <span id="historyCount">0 records</span>
               </div>
               <div class="feature-actions compact-actions">

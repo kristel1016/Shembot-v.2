@@ -8,11 +8,10 @@ const MEDIAPIPE_WASM = "./wasm";
 const MODEL_PATH = "./efficientdet_lite0.tflite";
 const POSE_MODEL_PATH = "./pose_landmarker_lite.task";
 const MAX_INFERENCE_DIMENSION = 416;
-const TRACK_HOLD_MS = 2600;
+const TRACK_HOLD_MS = 3400;
 const RECALIBRATE_AFTER_MS = 4000;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const ZOOMED_SCORE_FLOOR = 0.25;
-const UNVERIFIED_STRONG_SCORE = 0.82;
 const POSE_VERIFICATION_INTERVAL_MS = 650;
 const POSE_CACHE_MS = 1400;
 const ORIENTATION_SAMPLES = 2;
@@ -99,10 +98,32 @@ function loadStoredJson(key, fallback) {
   }
 }
 
+function compactStoredHistory(records) {
+  if (!Array.isArray(records)) return [];
+  const compacted = [];
+  let lastOccupancyCount = null;
+  for (const record of records) {
+    if (!record || typeof record !== "object") continue;
+    if (record.event === "occupancy") {
+      const count = Number(record.count) || 0;
+      if (count === lastOccupancyCount) continue;
+      lastOccupancyCount = count;
+    }
+    compacted.push(record);
+  }
+  return compacted.slice(-HISTORY_LIMIT);
+}
+
 const savedFlowCounts = loadStoredJson("flowCounts", {
   entered: 0,
   exited: 0,
 });
+const savedHistory = compactStoredHistory(
+  loadStoredJson("crowdCountHistory", []),
+);
+const lastSavedOccupancy = [...savedHistory]
+  .reverse()
+  .find((record) => record.event === "occupancy");
 
 const state = {
   detector: null,
@@ -123,7 +144,6 @@ const state = {
   lastPoseVerificationAt: -Infinity,
   lastPoseDetections: [],
   tracks: [],
-  nextTrackId: 1,
   lastConfirmedTracks: [],
   area: loadSavedArea(),
   selectingArea: false,
@@ -143,9 +163,10 @@ const state = {
   entered: Number(savedFlowCounts.entered) || 0,
   exited: Number(savedFlowCounts.exited) || 0,
   flowTracks: new Map(),
-  history: loadStoredJson("crowdCountHistory", []),
-  lastLoggedCount: null,
-  lastHistoryAt: 0,
+  history: savedHistory,
+  lastLoggedCount: lastSavedOccupancy
+    ? Number(lastSavedOccupancy.count) || 0
+    : null,
 };
 
 function clampStoredNumber(value, minimum, maximum, fallback) {
@@ -223,7 +244,7 @@ function updateFlowUi() {
 
 function updateHistoryUi() {
   const count = state.history.length;
-  elements.historyCount.textContent = `${count} ${count === 1 ? "record" : "records"}`;
+  elements.historyCount.textContent = `${count} saved ${count === 1 ? "event" : "events"}`;
   elements.downloadHistoryButton.disabled = count === 0;
   elements.clearHistoryButton.disabled = count === 0;
 }
@@ -246,13 +267,9 @@ function recordHistory(event, details = {}) {
   updateHistoryUi();
 }
 
-function recordCountHistory(count, now) {
-  if (
-    count === state.lastLoggedCount &&
-    now - state.lastHistoryAt < 30000
-  ) return;
+function recordCountHistory(count) {
+  if (count === state.lastLoggedCount) return;
   state.lastLoggedCount = count;
-  state.lastHistoryAt = now;
   recordHistory("occupancy", { count });
 }
 
@@ -1012,6 +1029,13 @@ function smoothBox(previous, next) {
   );
 }
 
+function nextAvailableTrackId() {
+  const usedIds = new Set(state.tracks.map((track) => track.id));
+  let id = 1;
+  while (usedIds.has(id)) id += 1;
+  return id;
+}
+
 function updateTracks(detections, now) {
   const unmatchedTracks = new Set(state.tracks.map((track) => track.id));
 
@@ -1035,26 +1059,29 @@ function updateTracks(detections, now) {
       bestTrack.hits += 1;
       bestTrack.lastSeen = now;
       if (detection.verifiedByPose) bestTrack.confirmed = true;
-      const requiredHits = bestTrack.maxScore >= 0.4 ? 2 : 3;
+      const requiredHits = bestTrack.maxScore >= 0.75 ? 3 : 4;
       if (bestTrack.hits >= requiredHits) bestTrack.confirmed = true;
       unmatchedTracks.delete(bestTrack.id);
     } else {
       state.tracks.push({
-        id: state.nextTrackId++,
+        id: nextAvailableTrackId(),
         bbox: detection.bbox,
         score: detection.score,
         maxScore: detection.score,
         hits: 1,
         lastSeen: now,
-        confirmed: detection.verifiedByPose || detection.score >= 0.72,
+        confirmed: Boolean(detection.verifiedByPose),
       });
     }
   }
 
-  state.tracks = state.tracks.filter((track) => {
+  const activeTracks = [];
+  for (const track of state.tracks) {
     const age = now - track.lastSeen;
-    return age <= TRACK_HOLD_MS;
-  });
+    if (age <= TRACK_HOLD_MS) activeTracks.push(track);
+    else state.flowTracks.delete(track.id);
+  }
+  state.tracks = activeTracks;
 
   return consolidateDetections(
     state.tracks.filter((track) => track.confirmed),
@@ -1281,10 +1308,7 @@ function detectLoop(token) {
     const poseWasAvailable = Boolean(state.poseLandmarker);
     const needsPoseVerification =
       poseWasAvailable &&
-      people.some(
-        (detection) =>
-          detection.edgeCropped || detection.score < UNVERIFIED_STRONG_SCORE,
-      ) &&
+      people.length > 0 &&
       performance.now() - state.lastPoseVerificationAt >=
         POSE_VERIFICATION_INTERVAL_MS;
     const now = performance.now();
@@ -1300,10 +1324,6 @@ function detectLoop(token) {
     const verifiedPeople = !poseWasAvailable || !state.poseLandmarker
       ? people
       : people.flatMap((detection) => {
-          if (
-            !detection.edgeCropped &&
-            detection.score >= UNVERIFIED_STRONG_SCORE
-          ) return [detection];
           let matchingPose = null;
           let bestMatchQuality = 0;
           for (const pose of poseDetections) {
@@ -1340,7 +1360,7 @@ function detectLoop(token) {
       if (state.countHistory.length > 3) state.countHistory.shift();
       const displayedCount = median(state.countHistory);
       updateCapacity(displayedCount);
-      recordCountHistory(displayedCount, startedAt);
+      recordCountHistory(displayedCount);
       updateFlowTracking(confirmedTracks, startedAt);
     }
 
@@ -1594,7 +1614,6 @@ elements.downloadHistoryButton.addEventListener("click", downloadHistoryCsv);
 elements.clearHistoryButton.addEventListener("click", () => {
   state.history = [];
   state.lastLoggedCount = null;
-  state.lastHistoryAt = 0;
   localStorage.removeItem("crowdCountHistory");
   updateHistoryUi();
 });
@@ -1642,6 +1661,7 @@ document.addEventListener("visibilitychange", async () => {
 
 window.addEventListener("beforeunload", stopCamera);
 if (!Array.isArray(state.history)) state.history = [];
+localStorage.setItem("crowdCountHistory", JSON.stringify(state.history));
 updateAreaControls();
 updateFlowUi();
 updateHistoryUi();
