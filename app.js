@@ -16,6 +16,8 @@ const UNVERIFIED_STRONG_SCORE = 0.82;
 const POSE_VERIFICATION_INTERVAL_MS = 650;
 const POSE_CACHE_MS = 1400;
 const ORIENTATION_SAMPLES = 2;
+const QUALITY_CHECK_INTERVAL_MS = 1200;
+const HISTORY_LIMIT = 1200;
 
 const elements = {
   camera: document.querySelector("#camera"),
@@ -38,6 +40,22 @@ const elements = {
   fpsValue: document.querySelector("#fpsValue"),
   capacityInput: document.querySelector("#capacityInput"),
   capacityOutput: document.querySelector("#capacityOutput"),
+  qualityAssistant: document.querySelector("#qualityAssistant"),
+  qualityStatus: document.querySelector("#qualityStatus"),
+  qualityMessage: document.querySelector("#qualityMessage"),
+  actualCountInput: document.querySelector("#actualCountInput"),
+  correctFeedbackButton: document.querySelector("#correctFeedbackButton"),
+  issueFeedbackButton: document.querySelector("#issueFeedbackButton"),
+  feedbackStatus: document.querySelector("#feedbackStatus"),
+  flowToggle: document.querySelector("#flowToggle"),
+  flowLineInput: document.querySelector("#flowLineInput"),
+  flowDirectionButton: document.querySelector("#flowDirectionButton"),
+  resetFlowButton: document.querySelector("#resetFlowButton"),
+  enteredValue: document.querySelector("#enteredValue"),
+  exitedValue: document.querySelector("#exitedValue"),
+  historyCount: document.querySelector("#historyCount"),
+  downloadHistoryButton: document.querySelector("#downloadHistoryButton"),
+  clearHistoryButton: document.querySelector("#clearHistoryButton"),
   errorMessage: document.querySelector("#errorMessage"),
 };
 
@@ -45,6 +63,11 @@ const inferenceCanvas = document.createElement("canvas");
 const inferenceContext = inferenceCanvas.getContext("2d", {
   alpha: false,
   desynchronized: true,
+});
+const qualityCanvas = document.createElement("canvas");
+const qualityContext = qualityCanvas.getContext("2d", {
+  alpha: false,
+  willReadFrequently: true,
 });
 
 function loadSavedArea() {
@@ -67,6 +90,20 @@ function loadSavedArea() {
   return null;
 }
 
+function loadStoredJson(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key));
+    return value ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const savedFlowCounts = loadStoredJson("flowCounts", {
+  entered: 0,
+  exited: 0,
+});
+
 const state = {
   detector: null,
   poseLandmarker: null,
@@ -87,12 +124,36 @@ const state = {
   lastPoseDetections: [],
   tracks: [],
   nextTrackId: 1,
+  lastConfirmedTracks: [],
   area: loadSavedArea(),
   selectingArea: false,
   dragStart: null,
   draftArea: null,
   wakeLock: null,
+  lastQualityAt: -Infinity,
+  quality: { code: "waiting", label: "Waiting for camera" },
+  flowEnabled: localStorage.getItem("flowEnabled") === "true",
+  flowLinePosition: clampStoredNumber(
+    localStorage.getItem("flowLinePosition"),
+    0.2,
+    0.8,
+    0.6,
+  ),
+  downIsEntry: localStorage.getItem("downIsEntry") !== "false",
+  entered: Number(savedFlowCounts.entered) || 0,
+  exited: Number(savedFlowCounts.exited) || 0,
+  flowTracks: new Map(),
+  history: loadStoredJson("crowdCountHistory", []),
+  lastLoggedCount: null,
+  lastHistoryAt: 0,
 };
+
+function clampStoredNumber(value, minimum, maximum, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? Math.min(maximum, Math.max(minimum, number))
+    : fallback;
+}
 
 function clamp(value, minimum, maximum) {
   return Math.min(maximum, Math.max(minimum, value));
@@ -135,8 +196,167 @@ function updateAreaControls() {
   elements.clearAreaButton.disabled = !state.running || !state.area;
 }
 
+function updateQualityUi(code, label, message) {
+  state.quality = { code, label, message };
+  elements.qualityAssistant.classList.toggle("is-warning", code === "warning");
+  elements.qualityAssistant.classList.toggle("is-waiting", code === "waiting");
+  elements.qualityStatus.textContent = label;
+  elements.qualityMessage.textContent = message;
+}
+
+function saveFlowCounts() {
+  localStorage.setItem("flowCounts", JSON.stringify({
+    entered: state.entered,
+    exited: state.exited,
+  }));
+}
+
+function updateFlowUi() {
+  elements.flowToggle.checked = state.flowEnabled;
+  elements.flowLineInput.value = String(Math.round(state.flowLinePosition * 100));
+  elements.flowDirectionButton.textContent = state.downIsEntry
+    ? "Down = entry"
+    : "Up = entry";
+  elements.enteredValue.textContent = String(state.entered);
+  elements.exitedValue.textContent = String(state.exited);
+}
+
+function updateHistoryUi() {
+  const count = state.history.length;
+  elements.historyCount.textContent = `${count} ${count === 1 ? "record" : "records"}`;
+  elements.downloadHistoryButton.disabled = count === 0;
+  elements.clearHistoryButton.disabled = count === 0;
+}
+
+function recordHistory(event, details = {}) {
+  const record = {
+    timestamp: new Date().toISOString(),
+    event,
+    count: Number(elements.countValue.textContent) || 0,
+    entered: state.entered,
+    exited: state.exited,
+    quality: state.quality.code,
+    ...details,
+  };
+  state.history.push(record);
+  if (state.history.length > HISTORY_LIMIT) {
+    state.history.splice(0, state.history.length - HISTORY_LIMIT);
+  }
+  localStorage.setItem("crowdCountHistory", JSON.stringify(state.history));
+  updateHistoryUi();
+}
+
+function recordCountHistory(count, now) {
+  if (
+    count === state.lastLoggedCount &&
+    now - state.lastHistoryAt < 30000
+  ) return;
+  state.lastLoggedCount = count;
+  state.lastHistoryAt = now;
+  recordHistory("occupancy", { count });
+}
+
+function csvValue(value) {
+  const text = value == null ? "" : String(value);
+  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function downloadBlob(blob, filename) {
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadHistoryCsv() {
+  if (state.history.length === 0) return;
+  const columns = [
+    "timestamp",
+    "event",
+    "count",
+    "entered",
+    "exited",
+    "quality",
+    "actualCount",
+    "trackId",
+    "direction",
+  ];
+  const rows = state.history.map((record) =>
+    columns.map((column) => csvValue(record[column])).join(",")
+  );
+  const csv = [columns.join(","), ...rows].join("\n");
+  downloadBlob(
+    new Blob([csv], { type: "text/csv;charset=utf-8" }),
+    `crowd-history-${new Date().toISOString().slice(0, 10)}.csv`,
+  );
+}
+
+function saveFeedback(isCorrect) {
+  if (!state.running) return;
+  const detectedCount = Number(elements.countValue.textContent) || 0;
+  const enteredActualCount = Number(elements.actualCountInput.value);
+  const actualCount = isCorrect ? detectedCount : enteredActualCount;
+
+  if (
+    !isCorrect &&
+    (elements.actualCountInput.value.trim() === "" ||
+      !Number.isFinite(actualCount) ||
+      actualCount < 0)
+  ) {
+    elements.feedbackStatus.textContent =
+      "Enter the actual number of people before saving an incorrect sample.";
+    elements.actualCountInput.focus();
+    return;
+  }
+
+  elements.actualCountInput.value = String(actualCount);
+  recordHistory(isCorrect ? "feedback-correct" : "feedback-incorrect", {
+    count: detectedCount,
+    actualCount,
+  });
+
+  if (isCorrect) {
+    elements.feedbackStatus.textContent =
+      "Correct count recorded locally. Thank you.";
+    return;
+  }
+
+  const width = elements.camera.videoWidth;
+  const height = elements.camera.videoHeight;
+  if (!width || !height) return;
+  const captureCanvas = document.createElement("canvas");
+  captureCanvas.width = width;
+  captureCanvas.height = height;
+  const captureContext = captureCanvas.getContext("2d");
+
+  captureContext.save();
+  if (state.mirrored) {
+    captureContext.translate(width, 0);
+    captureContext.scale(-1, 1);
+  }
+  captureContext.drawImage(elements.camera, 0, 0, width, height);
+  captureContext.restore();
+  captureContext.drawImage(elements.overlay, 0, 0, width, height);
+  captureCanvas.toBlob((blob) => {
+    if (!blob) return;
+    const timestamp = new Date().toISOString().replaceAll(":", "-");
+    downloadBlob(
+      blob,
+      `crowd-sample-actual-${actualCount}-detected-${detectedCount}-${timestamp}.png`,
+    );
+  }, "image/png");
+  elements.feedbackStatus.textContent =
+    "Incorrect sample downloaded locally and added to the history.";
+}
+
 function resetTracking() {
   state.tracks = [];
+  state.lastConfirmedTracks = [];
+  state.flowTracks.clear();
   state.countHistory = [];
   state.scanIndex = 0;
   state.scanDetections = [];
@@ -292,6 +512,88 @@ function prepareInferenceFrame(rotation, areaOverride) {
     height,
     rotation,
   };
+}
+
+function analyzeFrameQuality(now) {
+  if (now - state.lastQualityAt < QUALITY_CHECK_INTERVAL_MS) return;
+  state.lastQualityAt = now;
+
+  try {
+    const sourceWidth = inferenceCanvas.width;
+    const sourceHeight = inferenceCanvas.height;
+    if (!sourceWidth || !sourceHeight) return;
+    const width = 96;
+    const height = Math.max(48, Math.round(width * sourceHeight / sourceWidth));
+    if (qualityCanvas.width !== width) qualityCanvas.width = width;
+    if (qualityCanvas.height !== height) qualityCanvas.height = height;
+    qualityContext.drawImage(inferenceCanvas, 0, 0, width, height);
+    const pixels = qualityContext.getImageData(0, 0, width, height).data;
+    const step = Math.max(4, Math.floor(Math.min(width, height) / 48));
+    let total = 0;
+    let totalSquared = 0;
+    let gradient = 0;
+    let samples = 0;
+    let gradientSamples = 0;
+
+    for (let y = 0; y < height; y += step) {
+      let previousLuminance = null;
+      for (let x = 0; x < width; x += step) {
+        const index = (y * width + x) * 4;
+        const luminance =
+          pixels[index] * 0.2126 +
+          pixels[index + 1] * 0.7152 +
+          pixels[index + 2] * 0.0722;
+        total += luminance;
+        totalSquared += luminance * luminance;
+        samples += 1;
+        if (previousLuminance != null) {
+          gradient += Math.abs(luminance - previousLuminance);
+          gradientSamples += 1;
+        }
+        previousLuminance = luminance;
+      }
+    }
+
+    const brightness = total / Math.max(1, samples);
+    const contrast = Math.sqrt(
+      Math.max(0, totalSquared / Math.max(1, samples) - brightness * brightness),
+    );
+    const sharpness = gradient / Math.max(1, gradientSamples);
+
+    if (brightness < 52) {
+      updateQualityUi(
+        "warning",
+        "Scene is too dark",
+        "Add light in front of people or move the camera away from backlighting.",
+      );
+    } else if (brightness > 218) {
+      updateQualityUi(
+        "warning",
+        "Scene is overexposed",
+        "Reduce direct light or point the camera away from bright windows.",
+      );
+    } else if (contrast < 24) {
+      updateQualityUi(
+        "warning",
+        "Low image contrast",
+        "Improve lighting so people stand out from the background.",
+      );
+    } else if (sharpness < 8) {
+      updateQualityUi(
+        "warning",
+        "Image may be blurry",
+        "Clean the lens and keep the phone steady for more reliable boxes.",
+      );
+    } else {
+      updateQualityUi(
+        "good",
+        "Camera quality looks good",
+        "Lighting and detail are suitable for live person detection.",
+      );
+    }
+  } catch (error) {
+    console.warn("Camera quality check was skipped.", error);
+  }
 }
 
 function mapBoxToVideo(box, frame) {
@@ -759,6 +1061,71 @@ function updateTracks(detections, now) {
   );
 }
 
+function updateFlowTracking(tracks, now) {
+  if (!state.flowEnabled) {
+    state.flowTracks.clear();
+    return;
+  }
+
+  const sourceHeight = Math.max(1, elements.overlay.height);
+  const visibleTrackIds = new Set();
+  for (const track of tracks) {
+    visibleTrackIds.add(track.id);
+    const centerY = (track.bbox[1] + track.bbox[3] / 2) / sourceHeight;
+    const distanceFromLine = centerY - state.flowLinePosition;
+    if (Math.abs(distanceFromLine) < 0.035) continue;
+    const side = distanceFromLine < 0 ? "above" : "below";
+    const flowTrack = state.flowTracks.get(track.id);
+
+    if (!flowTrack) {
+      state.flowTracks.set(track.id, {
+        stableSide: side,
+        pendingSide: null,
+        pendingHits: 0,
+        lastSeen: now,
+      });
+      continue;
+    }
+
+    flowTrack.lastSeen = now;
+    if (side === flowTrack.stableSide) {
+      flowTrack.pendingSide = null;
+      flowTrack.pendingHits = 0;
+      continue;
+    }
+
+    if (flowTrack.pendingSide === side) flowTrack.pendingHits += 1;
+    else {
+      flowTrack.pendingSide = side;
+      flowTrack.pendingHits = 1;
+    }
+
+    if (flowTrack.pendingHits < 2) continue;
+    const movedDown = flowTrack.stableSide === "above" && side === "below";
+    const isEntry = state.downIsEntry ? movedDown : !movedDown;
+    if (isEntry) state.entered += 1;
+    else state.exited += 1;
+    saveFlowCounts();
+    updateFlowUi();
+    recordHistory(isEntry ? "entry" : "exit", {
+      trackId: track.id,
+      direction: movedDown ? "down" : "up",
+    });
+    flowTrack.stableSide = side;
+    flowTrack.pendingSide = null;
+    flowTrack.pendingHits = 0;
+  }
+
+  for (const [trackId, flowTrack] of state.flowTracks.entries()) {
+    if (
+      !visibleTrackIds.has(trackId) &&
+      now - flowTrack.lastSeen > TRACK_HOLD_MS * 1.5
+    ) {
+      state.flowTracks.delete(trackId);
+    }
+  }
+}
+
 function drawArea(context) {
   if (!state.area) return;
   const rawX = state.area.x * elements.overlay.width;
@@ -782,6 +1149,30 @@ function drawArea(context) {
   context.restore();
 }
 
+function drawFlowLine(context) {
+  if (!state.flowEnabled) return;
+  const y = state.flowLinePosition * elements.overlay.height;
+  const direction = state.downIsEntry ? "ENTRY ↓" : "ENTRY ↑";
+  context.save();
+  context.setLineDash([18, 10]);
+  context.lineWidth = Math.max(3, elements.overlay.width / 220);
+  context.strokeStyle = "#ffc857";
+  context.beginPath();
+  context.moveTo(0, y);
+  context.lineTo(elements.overlay.width, y);
+  context.stroke();
+  context.setLineDash([]);
+  context.font =
+    "800 " + Math.max(13, elements.overlay.width / 45) + "px system-ui";
+  const textWidth = context.measureText(direction).width;
+  const labelHeight = Math.max(22, elements.overlay.width / 30);
+  context.fillStyle = "#ffc857";
+  context.fillRect(8, Math.max(0, y - labelHeight), textWidth + 14, labelHeight);
+  context.fillStyle = "#17191d";
+  context.fillText(direction, 15, Math.max(1, y - labelHeight + 2));
+  context.restore();
+}
+
 function drawDetections(tracks) {
   const context = elements.overlay.getContext("2d");
   context.clearRect(0, 0, elements.overlay.width, elements.overlay.height);
@@ -800,7 +1191,7 @@ function drawDetections(tracks) {
     const x = state.mirrored
       ? elements.overlay.width - rawX - width
       : rawX;
-    const label = Math.round(track.score * 100) + "%";
+    const label = `P${track.id} ${Math.round(track.score * 100)}%`;
     context.strokeStyle = color;
     context.strokeRect(x, y, width, height);
     const textWidth = context.measureText(label).width;
@@ -812,6 +1203,7 @@ function drawDetections(tracks) {
   }
 
   drawArea(context);
+  drawFlowLine(context);
 }
 
 function scheduleDetection(token) {
@@ -842,6 +1234,9 @@ function detectLoop(token) {
       ? state.area
       : scanAreas[state.scanIndex % scanAreas.length];
     const frame = prepareInferenceFrame(rotation, scanArea);
+    if (state.calibration || scanArea?.kind === "full") {
+      analyzeFrameQuality(startedAt);
+    }
     const result = state.detector.detectForVideo(inferenceCanvas, startedAt);
     if (!state.running || token !== state.loopToken) return;
 
@@ -943,9 +1338,13 @@ function detectLoop(token) {
       confirmedTracks = updateTracks(fusedDetections, startedAt);
       state.countHistory.push(confirmedTracks.length);
       if (state.countHistory.length > 3) state.countHistory.shift();
-      updateCapacity(median(state.countHistory));
+      const displayedCount = median(state.countHistory);
+      updateCapacity(displayedCount);
+      recordCountHistory(displayedCount, startedAt);
+      updateFlowTracking(confirmedTracks, startedAt);
     }
 
+    state.lastConfirmedTracks = confirmedTracks;
     drawDetections(confirmedTracks);
 
     const inferenceFps = 1000 / Math.max(1, performance.now() - startedAt);
@@ -1011,6 +1410,9 @@ async function startCamera() {
     elements.hud.hidden = false;
     elements.flipButton.disabled = false;
     elements.setAreaButton.disabled = false;
+    elements.correctFeedbackButton.disabled = false;
+    elements.issueFeedbackButton.disabled = false;
+    elements.feedbackStatus.textContent = "Samples stay on this device.";
     elements.startButton.classList.add("is-running");
     elements.startButton.innerHTML =
       '<span class="button-icon">■</span> Stop camera';
@@ -1050,15 +1452,24 @@ function stopCamera() {
     elements.overlay.width,
     elements.overlay.height,
   );
+  state.lastConfirmedTracks = [];
+  state.flowTracks.clear();
   elements.hud.hidden = true;
   elements.emptyState.hidden = false;
   elements.flipButton.disabled = true;
   elements.setAreaButton.disabled = true;
   elements.clearAreaButton.disabled = true;
+  elements.correctFeedbackButton.disabled = true;
+  elements.issueFeedbackButton.disabled = true;
   elements.startButton.classList.remove("is-running");
   elements.startButton.innerHTML =
     '<span class="button-icon">●</span> Start camera';
   elements.cameraCard.classList.remove("is-alert");
+  updateQualityUi(
+    "waiting",
+    "Waiting for camera",
+    "Start detection to check lighting and image clarity.",
+  );
   state.wakeLock?.release().catch(() => {});
   state.wakeLock = null;
 }
@@ -1150,6 +1561,43 @@ elements.capacityInput.addEventListener("input", () => {
     elements.capacityInput.value + " people";
   updateCapacity(Number(elements.countValue.textContent));
 });
+elements.correctFeedbackButton.addEventListener("click", () => saveFeedback(true));
+elements.issueFeedbackButton.addEventListener("click", () => saveFeedback(false));
+elements.flowToggle.addEventListener("change", () => {
+  state.flowEnabled = elements.flowToggle.checked;
+  state.flowTracks.clear();
+  localStorage.setItem("flowEnabled", String(state.flowEnabled));
+  drawDetections(state.lastConfirmedTracks);
+});
+elements.flowLineInput.addEventListener("input", () => {
+  state.flowLinePosition = Number(elements.flowLineInput.value) / 100;
+  state.flowTracks.clear();
+  localStorage.setItem("flowLinePosition", String(state.flowLinePosition));
+  drawDetections(state.lastConfirmedTracks);
+});
+elements.flowDirectionButton.addEventListener("click", () => {
+  state.downIsEntry = !state.downIsEntry;
+  state.flowTracks.clear();
+  localStorage.setItem("downIsEntry", String(state.downIsEntry));
+  updateFlowUi();
+  drawDetections(state.lastConfirmedTracks);
+});
+elements.resetFlowButton.addEventListener("click", () => {
+  state.entered = 0;
+  state.exited = 0;
+  state.flowTracks.clear();
+  saveFlowCounts();
+  updateFlowUi();
+  recordHistory("flow-reset");
+});
+elements.downloadHistoryButton.addEventListener("click", downloadHistoryCsv);
+elements.clearHistoryButton.addEventListener("click", () => {
+  state.history = [];
+  state.lastLoggedCount = null;
+  state.lastHistoryAt = 0;
+  localStorage.removeItem("crowdCountHistory");
+  updateHistoryUi();
+});
 
 elements.zoneSelection.addEventListener("pointerdown", (event) => {
   state.dragStart = pointerPosition(event);
@@ -1193,7 +1641,10 @@ document.addEventListener("visibilitychange", async () => {
 });
 
 window.addEventListener("beforeunload", stopCamera);
+if (!Array.isArray(state.history)) state.history = [];
 updateAreaControls();
+updateFlowUi();
+updateHistoryUi();
 loadModel();
 
 async function createDetector(vision, delegate) {

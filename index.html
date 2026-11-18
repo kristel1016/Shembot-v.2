@@ -6,8 +6,8 @@
     <meta name="theme-color" content="#eef5fb" />
     <meta name="description" content="Private, on-device people counting from your phone or laptop camera." />
     <title>Phone Crowd Counter</title>
-    <link rel="stylesheet" href="./styles.css?v=20261118-accuracy4" />
-    <script defer src="./boot.js?v=20261118-accuracy4"></script>
+    <link rel="stylesheet" href="./styles.css?v=20261118-features2" />
+    <script defer src="./boot.js?v=20261118-features2"></script>
   </head>
   <body>
     <main class="app-frame">
@@ -151,6 +151,84 @@
             </div>
           </section>
         </div>
+
+        <section class="feature-grid" aria-label="Accuracy and activity tools">
+          <article class="feature-panel quality-panel">
+            <div class="feature-heading">
+              <div>
+                <p class="section-kicker">ACCURACY ASSISTANT</p>
+                <h2>Camera quality</h2>
+              </div>
+              <span class="feature-icon feature-icon-blue" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M9 4 7.2 6H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.2L15 4H9Zm3 13a4 4 0 1 1 0-8 4 4 0 0 1 0 8Z" /></svg>
+              </span>
+            </div>
+
+            <div class="quality-assistant is-waiting" id="qualityAssistant" role="status">
+              <span class="quality-dot" aria-hidden="true"></span>
+              <div>
+                <strong id="qualityStatus">Waiting for camera</strong>
+                <span id="qualityMessage">Start detection to check lighting and image clarity.</span>
+              </div>
+            </div>
+
+            <div class="feedback-tools">
+              <div>
+                <strong>Help improve detection</strong>
+                <span>Mark the current count or save an incorrect sample locally.</span>
+              </div>
+              <label class="actual-count-field" for="actualCountInput">
+                <span>Actual people</span>
+                <input id="actualCountInput" type="number" min="0" max="200" inputmode="numeric" placeholder="0" />
+              </label>
+              <div class="feature-actions">
+                <button class="tool-button tool-button-positive" id="correctFeedbackButton" disabled>Count is correct</button>
+                <button class="tool-button" id="issueFeedbackButton" disabled>Save incorrect sample</button>
+              </div>
+              <p class="tool-status" id="feedbackStatus" aria-live="polite">Samples stay on this device.</p>
+            </div>
+          </article>
+
+          <article class="feature-panel flow-panel">
+            <div class="feature-heading">
+              <div>
+                <p class="section-kicker">ROOM ACTIVITY</p>
+                <h2>Entry and exit counter</h2>
+              </div>
+              <label class="switch" title="Enable entry and exit counting">
+                <input id="flowToggle" type="checkbox" />
+                <span aria-hidden="true"></span>
+                <b>Flow</b>
+              </label>
+            </div>
+
+            <div class="flow-counts">
+              <div><span>Entered</span><strong id="enteredValue">0</strong></div>
+              <div><span>Exited</span><strong id="exitedValue">0</strong></div>
+            </div>
+
+            <label class="flow-line-control" for="flowLineInput">
+              <span>Counting-line position</span>
+              <input id="flowLineInput" type="range" min="20" max="80" value="60" />
+            </label>
+
+            <div class="feature-actions">
+              <button class="tool-button" id="flowDirectionButton">Down = entry</button>
+              <button class="tool-button" id="resetFlowButton">Reset flow</button>
+            </div>
+
+            <div class="history-tools">
+              <div>
+                <strong>Local count history</strong>
+                <span id="historyCount">0 records</span>
+              </div>
+              <div class="feature-actions compact-actions">
+                <button class="tool-button" id="downloadHistoryButton">Download CSV</button>
+                <button class="tool-button tool-button-quiet" id="clearHistoryButton">Clear</button>
+              </div>
+            </div>
+          </article>
+        </section>
 
         <section class="notes" id="privacy" aria-label="Usage notes">
           <article>

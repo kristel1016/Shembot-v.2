@@ -15,3 +15,9 @@ group boxes.
 
 The app is a static website and is ready for HTTPS hosting with GitHub Pages.
 Camera frames are processed in the browser and are not uploaded by the app.
+
+Additional browser-local tools include camera lighting/clarity guidance,
+persistent tracking IDs, an adjustable entry/exit counting line, occupancy and
+flow history export to CSV, and correct/incorrect feedback capture. Incorrect
+samples are downloaded directly to the user's device with the detected and
+actual counts in the filename; they are never uploaded automatically.
