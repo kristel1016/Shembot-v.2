@@ -72,6 +72,7 @@ const state = {
   stream: null,
   running: false,
   facingMode: "environment",
+  mirrored: false,
   loopToken: 0,
   fpsHistory: [],
   countHistory: [],
@@ -149,6 +150,19 @@ function syncCanvas() {
   if (elements.overlay.width !== width) elements.overlay.width = width;
   if (elements.overlay.height !== height) elements.overlay.height = height;
   elements.cameraStage.style.aspectRatio = width + " / " + height;
+}
+
+function syncCameraMirroring() {
+  const track = state.stream?.getVideoTracks?.()[0];
+  const settings = track?.getSettings?.() || {};
+  const label = (track?.label || "").toLowerCase();
+  const looksLikeFrontCamera =
+    /front|user|facetime|integrated|webcam/.test(label);
+  state.mirrored =
+    settings.facingMode === "user" ||
+    (!settings.facingMode &&
+      (state.facingMode === "user" || looksLikeFrontCamera));
+  elements.cameraStage.classList.toggle("is-mirrored", state.mirrored);
 }
 
 function getCrop(areaOverride) {
@@ -434,7 +448,9 @@ function isPlausiblePerson(detection, frame, minimumScore) {
   const aspectRatio = box.height / Math.max(1, box.width);
   const areaRatio = (box.width * box.height) / (frame.width * frame.height);
 
-  if (aspectRatio < 0.7 || areaRatio < 0.001 || areaRatio > 0.55) {
+  // A close selfie can occupy most of the frame. It is allowed through here,
+  // then must pass pose verification before an edge-cropped box is counted.
+  if (aspectRatio < 0.7 || areaRatio < 0.001 || areaRatio > 0.88) {
     return false;
   }
 
@@ -457,7 +473,7 @@ function orientationScore(detections, frame) {
     const box = detection.boundingBox;
     const aspectRatio = box.height / Math.max(1, box.width);
     const areaRatio = (box.width * box.height) / (frame.width * frame.height);
-    if (aspectRatio >= 0.65 && areaRatio >= 0.001 && areaRatio <= 0.55) {
+    if (aspectRatio >= 0.65 && areaRatio >= 0.001 && areaRatio <= 0.88) {
       score += category.score * clamp(aspectRatio, 0.8, 2.2);
     }
   }
@@ -733,8 +749,8 @@ function drawDetections(tracks) {
   context.clearRect(0, 0, elements.overlay.width, elements.overlay.height);
   const styles = getComputedStyle(document.documentElement);
   const color = elements.cameraCard.classList.contains("is-alert")
-    ? styles.getPropertyValue("--red").trim()
-    : styles.getPropertyValue("--green").trim();
+    ? styles.getPropertyValue("--danger").trim()
+    : styles.getPropertyValue("--accent").trim();
 
   context.lineWidth = Math.max(3, elements.overlay.width / 210);
   context.font =
@@ -829,7 +845,10 @@ function detectLoop(token) {
     const poseWasAvailable = Boolean(state.poseLandmarker);
     const needsPoseVerification =
       poseWasAvailable &&
-      people.some((detection) => detection.score < UNVERIFIED_STRONG_SCORE) &&
+      people.some(
+        (detection) =>
+          detection.edgeCropped || detection.score < UNVERIFIED_STRONG_SCORE,
+      ) &&
       performance.now() - state.lastPoseVerificationAt >=
         POSE_VERIFICATION_INTERVAL_MS;
     const poseDetections = needsPoseVerification
@@ -841,12 +860,15 @@ function detectLoop(token) {
     const verifiedPeople = !poseWasAvailable || !state.poseLandmarker
       ? people
       : people.flatMap((detection) => {
-          if (detection.score >= UNVERIFIED_STRONG_SCORE) return [detection];
+          if (
+            !detection.edgeCropped &&
+            detection.score >= UNVERIFIED_STRONG_SCORE
+          ) return [detection];
           const isPoseVerified = poseDetections.some((pose) =>
             detectionsCorrespond(detection, pose)
           );
           return isPoseVerified
-            ? [{ ...detection, verifiedByPose: true }]
+            ? [{ ...detection, edgeCropped: false, verifiedByPose: true }]
             : [];
         });
     state.scanDetections.push(...verifiedPeople);
@@ -917,6 +939,7 @@ async function startCamera() {
     });
     elements.camera.srcObject = state.stream;
     await elements.camera.play();
+    syncCameraMirroring();
     syncCanvas();
     state.running = true;
     state.loopToken += 1;
@@ -1000,15 +1023,17 @@ function startAreaSelection() {
 
 function pointerPosition(event) {
   const rect = elements.zoneSelection.getBoundingClientRect();
+  const displayX = clamp((event.clientX - rect.left) / rect.width, 0, 1);
   return {
-    x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
+    x: state.mirrored ? 1 - displayX : displayX,
     y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
   };
 }
 
 function updateZoneDraft(area) {
+  const displayX = state.mirrored ? 1 - area.x - area.width : area.x;
   elements.zoneDraft.hidden = false;
-  elements.zoneDraft.style.left = area.x * 100 + "%";
+  elements.zoneDraft.style.left = displayX * 100 + "%";
   elements.zoneDraft.style.top = area.y * 100 + "%";
   elements.zoneDraft.style.width = area.width * 100 + "%";
   elements.zoneDraft.style.height = area.height * 100 + "%";

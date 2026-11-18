@@ -417,6 +417,11 @@ canvas {
   object-fit: contain;
 }
 
+.camera-stage.is-mirrored video,
+.camera-stage.is-mirrored canvas {
+  transform: scaleX(-1);
+}
+
 canvas {
   z-index: 2;
   pointer-events: none;
