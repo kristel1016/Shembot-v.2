@@ -8,8 +8,11 @@
   --muted-ink: #006b95;
   --accent: #006b95;
   --border: #e6e3dc;
-  --hover-light: #f3f1ec;
+  --hover-light: #f3f4f6;
   --focus: #8da79a;
+  --control-border: #e5e7eb;
+  --control-focus: #9ca3af;
+  --success-hover: #166534;
   --navy: var(--ink);
   --medium-blue: var(--accent);
   --off-white: var(--background);
@@ -41,7 +44,7 @@
   --workspace-ink: var(--ink);
   --workspace-muted: var(--muted-ink);
   --workspace-surface: var(--surface);
-  --success: #2f7d5b;
+  --success: #15803d;
   font-family: "Plus Jakarta Sans", system-ui, sans-serif;
 }
 
@@ -422,12 +425,15 @@ canvas.overlay-disabled {
   bottom: 18px;
   left: 50%;
   display: flex;
+  align-items: center;
   gap: 8px;
-  padding: 7px;
-  border: 1px solid var(--border);
+  padding: 6px;
+  border: 1px solid var(--control-border);
   border-radius: 14px;
-  background: var(--surface);
-  box-shadow: none;
+  background: #ffffff;
+  background-image: none;
+  box-shadow: 0 4px 12px rgba(12, 29, 50, 0.12);
+  backdrop-filter: none;
   transform: translateX(-50%);
 }
 
@@ -442,11 +448,13 @@ canvas.overlay-disabled {
 
 .primary-button,
 .icon-button {
+  height: 44px;
   min-height: 44px;
   border-radius: 10px;
 }
 
 .primary-button {
+  width: 154px;
   min-width: 154px;
   padding: 0 20px;
   color: var(--background);
@@ -472,12 +480,20 @@ canvas.overlay-disabled {
 
 .primary-button.is-running:hover:not(:disabled) {
   color: var(--background);
-  background: #276b4d;
+  background: var(--success-hover);
   transform: none;
 }
 
 .primary-button.is-running .button-icon {
-  color: var(--background);
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  color: transparent;
+  background: #ffffff;
+  vertical-align: 1px;
+  animation: camera-live-pulse 1.8s ease-out infinite;
 }
 
 .primary-button:disabled {
@@ -496,12 +512,29 @@ canvas.overlay-disabled {
   width: 44px;
   place-items: center;
   color: var(--ink);
-  background: var(--background);
+  background: #ffffff;
+  transition: color 150ms ease, background 150ms ease;
 }
 
 .icon-button:hover:not(:disabled) {
   color: var(--ink);
   background: var(--hover-light);
+}
+
+.viewport-actions button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 3px var(--control-focus);
+}
+
+@keyframes camera-live-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.55);
+  }
+
+  70%,
+  100% {
+    box-shadow: 0 0 0 5px rgba(255, 255, 255, 0);
+  }
 }
 
 .icon-button svg {
@@ -1259,12 +1292,15 @@ input[type="range"] {
   }
 
   .primary-button {
+    width: 136px;
     min-width: 136px;
+    height: 40px;
     min-height: 40px;
   }
 
   .icon-button {
     width: 40px;
+    height: 40px;
     min-height: 40px;
   }
 
