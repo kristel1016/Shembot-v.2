@@ -21,3 +21,41 @@ persistent tracking IDs, an adjustable entry/exit counting line, occupancy and
 flow history export to CSV, and correct/incorrect feedback capture. Incorrect
 samples are downloaded directly to the user's device with the detected and
 actual counts in the filename; they are never uploaded automatically.
+
+## Project Structure
+
+```
+shembot2/
+├── index.html                          # App entry point (root for GitHub Pages)
+├── .nojekyll                           # Disables Jekyll processing on GitHub Pages
+├── README.md                           # Project documentation
+│
+├── assets/                             # Static assets
+│   └── css/
+│       └── styles.css                  # Application stylesheet
+│
+├── src/                                # Application source code
+│   └── js/
+│       ├── boot.js                     # Lightweight bootstrap / loader script
+│       └── app.js                      # Main application logic (detection, tracking, UI)
+│
+└── vendor/                             # Third-party libraries and models
+    └── mediapipe/
+        ├── vision_bundle.mjs           # MediaPipe Vision SDK (bundled ES module)
+        ├── wasm/                       # MediaPipe WASM runtime (filenames must not change)
+        │   ├── vision_wasm_internal.js
+        │   ├── vision_wasm_internal.wasm
+        │   ├── vision_wasm_module_internal.js
+        │   └── vision_wasm_module_internal.wasm
+        └── models/                     # ML model files
+            ├── efficientdet_lite0.tflite   # Person detection model
+            └── pose_landmarker_lite.task   # Pose verification model
+```
+
+## Getting Started
+
+1. Serve the project root over HTTPS (or use GitHub Pages).
+2. Open `index.html` in a modern browser.
+3. Grant camera access and start detection.
+
+No build step is required — all code runs directly in the browser.
