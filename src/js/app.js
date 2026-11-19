@@ -2,11 +2,11 @@ import {
   FilesetResolver,
   ObjectDetector,
   PoseLandmarker,
-} from "../../vendor/mediapipe/vision_bundle.mjs";
+} from "../../lib/mediapipe/vision_bundle.mjs";
 
-const MEDIAPIPE_WASM = "../../vendor/mediapipe/wasm";
-const MODEL_PATH = "../../vendor/mediapipe/models/efficientdet_lite0.tflite";
-const POSE_MODEL_PATH = "../../vendor/mediapipe/models/pose_landmarker_lite.task";
+const MEDIAPIPE_WASM = "../../lib/mediapipe/wasm";
+const MODEL_PATH = "../../lib/mediapipe/models/efficientdet_lite0.tflite";
+const POSE_MODEL_PATH = "../../lib/mediapipe/models/pose_landmarker_lite.task";
 const MAX_INFERENCE_DIMENSION = 512;
 const TRACK_HOLD_MS = 3400;
 const RECALIBRATE_AFTER_MS = 4000;

@@ -39,7 +39,7 @@ shembot2/
 │       ├── boot.js                     # Lightweight bootstrap / loader script
 │       └── app.js                      # Main application logic (detection, tracking, UI)
 │
-└── vendor/                             # Third-party libraries and models
+└── lib/                                # Third-party libraries and models
     └── mediapipe/
         ├── vision_bundle.mjs           # MediaPipe Vision SDK (bundled ES module)
         ├── wasm/                       # MediaPipe WASM runtime (filenames must not change)
