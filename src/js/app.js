@@ -58,6 +58,7 @@ const elements = {
   feedbackStatus: document.querySelector("#feedbackStatus"),
   flowToggle: document.querySelector("#flowToggle"),
   flowLineInput: document.querySelector("#flowLineInput"),
+  flowLineOutput: document.querySelector("#flowLineOutput"),
   flowDirectionButton: document.querySelector("#flowDirectionButton"),
   resetFlowButton: document.querySelector("#resetFlowButton"),
   enteredValue: document.querySelector("#enteredValue"),
@@ -250,8 +251,15 @@ function saveFlowCounts() {
 }
 
 function updateFlowUi() {
+  const flowPercent = Math.round(state.flowLinePosition * 100);
+  const rangeMinimum = Number(elements.flowLineInput.min);
+  const rangeMaximum = Number(elements.flowLineInput.max);
+  const progress = ((flowPercent - rangeMinimum) / (rangeMaximum - rangeMinimum)) * 100;
   elements.flowToggle.checked = state.flowEnabled;
-  elements.flowLineInput.value = String(Math.round(state.flowLinePosition * 100));
+  elements.flowLineInput.value = String(flowPercent);
+  elements.flowLineInput.style.setProperty("--range-progress", `${progress}%`);
+  elements.flowLineOutput.value = `${flowPercent}%`;
+  elements.flowDirectionButton.dataset.direction = state.downIsEntry ? "down" : "up";
   elements.flowDirectionButton.textContent = state.downIsEntry
     ? "Down = entry"
     : "Up = entry";
@@ -1664,6 +1672,7 @@ elements.flowToggle.addEventListener("change", () => {
 elements.flowLineInput.addEventListener("input", () => {
   state.flowLinePosition = Number(elements.flowLineInput.value) / 100;
   state.flowTracks.clear();
+  updateFlowUi();
   localStorage.setItem("flowLinePosition", String(state.flowLinePosition));
   drawDetections(state.lastConfirmedTracks);
 });

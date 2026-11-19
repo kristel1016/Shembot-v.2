@@ -6,8 +6,8 @@
     <meta name="theme-color" content="#0c1d32" />
     <meta name="description" content="Private, on-device people counting from your phone or laptop camera." />
     <title>Shembot Vision Console</title>
-    <link rel="stylesheet" href="./assets/css/styles.css?v=20261120-controls1" />
-    <script defer src="./src/js/boot.js?v=20261119-camera1"></script>
+    <link rel="stylesheet" href="./assets/css/styles.css?v=20261120-flow1" />
+    <script defer src="./src/js/boot.js?v=20261120-flow1"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -183,11 +183,14 @@
                 <span><small>Entered</small><strong id="enteredValue">0</strong></span>
                 <span><small>Exited</small><strong id="exitedValue">0</strong></span>
               </div>
-              <label class="range-heading" for="flowLineInput"><span><strong>Counting line</strong><small>Position in frame</small></span></label>
-              <input id="flowLineInput" type="range" min="20" max="80" value="60" />
+              <label class="range-heading" for="flowLineInput">
+                <span><strong>Counting line</strong><small>Position in frame</small></span>
+                <output id="flowLineOutput" for="flowLineInput">60%</output>
+              </label>
+              <input id="flowLineInput" type="range" min="20" max="80" value="60" style="--range-progress: 66.667%" />
               <div class="button-pair">
-                <button class="secondary-button" id="flowDirectionButton">Down = entry</button>
-                <button class="secondary-button" id="resetFlowButton">Reset</button>
+                <button class="secondary-button flow-direction-button" id="flowDirectionButton">Down = entry</button>
+                <button class="secondary-button flow-reset-button" id="resetFlowButton">Reset</button>
               </div>
             </div>
           </section>
