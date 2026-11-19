@@ -1,5 +1,12 @@
 # SHEMBOT v2 — Milestone 2 (50% checkpoint)
 
+## About
+
+Shembot is a private, on-device crowd counter with live person detection and
+entry/exit analytics.
+
+**Live site:** <https://macatangay-shaine.github.io/Shembot-v.2/>
+
 SHEMBOT is a mobile-first, browser-based people counter. It opens a phone or
 laptop camera, runs person detection locally, draws boxes, stabilizes the
 count, and displays capacity and entry/exit information. Camera frames are not
@@ -30,7 +37,7 @@ python evaluation/evaluate_baseline.py
 
 Open the deployed HTTPS prototype—no local server is required:
 
-**<https://kristel1016.github.io/Shembot-v.2/>**
+**<https://macatangay-shaine.github.io/Shembot-v.2/>**
 
 Allow camera access and press **Start camera**. Use a current Chrome, Edge, or
 Safari browser. No npm install or build step is required; `npm test` is an
