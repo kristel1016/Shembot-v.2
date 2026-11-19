@@ -5,8 +5,8 @@
   --background: #fffbfc;
   --surface: #d9e2e9;
   --ink: #0c1d32;
-  --muted-ink: #007aad;
-  --accent: #007aad;
+  --muted-ink: #006b95;
+  --accent: #006b95;
   --border: #d9e2e9;
   --navy: var(--ink);
   --medium-blue: var(--accent);
@@ -108,7 +108,7 @@ p {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(330px, 23vw, 390px);
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 20vw, 350px);
   width: 100vw;
   height: 100vh;
   height: 100dvh;
@@ -547,7 +547,7 @@ canvas.overlay-disabled {
 
 .control-sidebar {
   display: grid;
-  min-width: 320px;
+  min-width: 300px;
   min-height: 0;
   grid-template-rows: auto auto minmax(0, 1fr);
   border-left: 0;
@@ -1126,7 +1126,7 @@ input[type="range"] {
 
 @media (max-width: 1100px) {
   .app-shell {
-    grid-template-columns: minmax(0, 1fr) 340px;
+    grid-template-columns: minmax(0, 1fr) 310px;
   }
 
   .metric {
