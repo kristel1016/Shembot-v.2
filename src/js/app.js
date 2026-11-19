@@ -1540,22 +1540,65 @@ function startAreaSelection() {
   elements.zoneDraft.hidden = true;
 }
 
-function pointerPosition(event) {
+function getCoverProjection() {
   const rect = elements.zoneSelection.getBoundingClientRect();
-  const displayX = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+  const sourceWidth = elements.overlay.width || elements.camera.videoWidth || rect.width;
+  const sourceHeight = elements.overlay.height || elements.camera.videoHeight || rect.height;
+  const scale = Math.max(rect.width / sourceWidth, rect.height / sourceHeight);
+  const renderedWidth = sourceWidth * scale;
+  const renderedHeight = sourceHeight * scale;
+
+  return {
+    rect,
+    renderedWidth,
+    renderedHeight,
+    offsetX: (rect.width - renderedWidth) / 2,
+    offsetY: (rect.height - renderedHeight) / 2,
+  };
+}
+
+function pointerPosition(event) {
+  const projection = getCoverProjection();
+  const displayX = clamp(
+    (event.clientX - projection.rect.left - projection.offsetX) /
+      projection.renderedWidth,
+    0,
+    1,
+  );
   return {
     x: state.mirrored ? 1 - displayX : displayX,
-    y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
+    y: clamp(
+      (event.clientY - projection.rect.top - projection.offsetY) /
+        projection.renderedHeight,
+      0,
+      1,
+    ),
   };
 }
 
 function updateZoneDraft(area) {
+  const projection = getCoverProjection();
   const displayX = state.mirrored ? 1 - area.x - area.width : area.x;
+  const rawLeft = projection.offsetX + displayX * projection.renderedWidth;
+  const rawTop = projection.offsetY + area.y * projection.renderedHeight;
+  const left = clamp(rawLeft, 0, projection.rect.width);
+  const top = clamp(rawTop, 0, projection.rect.height);
+  const right = clamp(
+    rawLeft + area.width * projection.renderedWidth,
+    0,
+    projection.rect.width,
+  );
+  const bottom = clamp(
+    rawTop + area.height * projection.renderedHeight,
+    0,
+    projection.rect.height,
+  );
+
   elements.zoneDraft.hidden = false;
-  elements.zoneDraft.style.left = displayX * 100 + "%";
-  elements.zoneDraft.style.top = area.y * 100 + "%";
-  elements.zoneDraft.style.width = area.width * 100 + "%";
-  elements.zoneDraft.style.height = area.height * 100 + "%";
+  elements.zoneDraft.style.left = left + "px";
+  elements.zoneDraft.style.top = top + "px";
+  elements.zoneDraft.style.width = Math.max(0, right - left) + "px";
+  elements.zoneDraft.style.height = Math.max(0, bottom - top) + "px";
 }
 
 function finishAreaSelection(event) {
