@@ -7,13 +7,13 @@ import {
 const MEDIAPIPE_WASM = "./wasm";
 const MODEL_PATH = "./efficientdet_lite0.tflite";
 const POSE_MODEL_PATH = "./pose_landmarker_lite.task";
-const MAX_INFERENCE_DIMENSION = 416;
+const MAX_INFERENCE_DIMENSION = 512;
 const TRACK_HOLD_MS = 3400;
 const RECALIBRATE_AFTER_MS = 4000;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const ZOOMED_SCORE_FLOOR = 0.25;
-const POSE_VERIFICATION_INTERVAL_MS = 650;
-const POSE_CACHE_MS = 1400;
+const POSE_VERIFICATION_INTERVAL_MS = 420;
+const POSE_CACHE_MS = 1100;
 const ORIENTATION_SAMPLES = 2;
 const QUALITY_CHECK_INTERVAL_MS = 1200;
 const HISTORY_LIMIT = 1200;
@@ -688,32 +688,31 @@ function poseResultToDetections(result, frame, scanArea) {
       .filter(({ landmark }) =>
         Number.isFinite(landmark.x) &&
         Number.isFinite(landmark.y) &&
-        (landmark.visibility ?? 1) >= 0.35 &&
-        (landmark.presence ?? 1) >= 0.35
+        (landmark.visibility ?? 1) >= 0.25 &&
+        (landmark.presence ?? 1) >= 0.25
       );
     const visibleByIndex = new Map(
       visible.map(({ landmark, index }) => [index, landmark]),
     );
-    const leftShoulder = visibleByIndex.get(11);
-    const rightShoulder = visibleByIndex.get(12);
+    const shoulders = [visibleByIndex.get(11), visibleByIndex.get(12)]
+      .filter(Boolean);
     const hips = [visibleByIndex.get(23), visibleByIndex.get(24)].filter(Boolean);
     const visibleHeadPoints = [0, 1, 2, 3, 4, 5, 6, 7, 8]
       .filter((index) => visibleByIndex.has(index)).length;
     const visibleArmPoints = [13, 14, 15, 16]
       .filter((index) => visibleByIndex.has(index)).length;
     if (
-      visible.length < 6 ||
-      !leftShoulder ||
-      !rightShoulder ||
+      visible.length < 5 ||
+      shoulders.length === 0 ||
       (hips.length === 0 && visibleHeadPoints === 0 && visibleArmPoints < 2)
     ) {
       return [];
     }
 
     if (hips.length > 0) {
-      const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
+      const shoulderY = average(shoulders.map((shoulder) => shoulder.y));
       const hipY = average(hips.map((hip) => hip.y));
-      if (hipY - shoulderY < 0.015) return [];
+      if (hipY - shoulderY < 0.01) return [];
     }
 
     const points = visible.map(({ landmark }) =>
@@ -730,14 +729,27 @@ function poseResultToDetections(result, frame, scanArea) {
     right = clamp(right + width * 0.18, 0, frame.sourceWidth);
     top = clamp(top - height * 0.12, 0, frame.sourceHeight);
     bottom = clamp(bottom + height * 0.12, 0, frame.sourceHeight);
+    const landmarkConfidence = average(
+      visible.map(({ landmark }) => Math.min(
+        landmark.visibility ?? 1,
+        landmark.presence ?? 1,
+      )),
+    );
+    const strongStandalonePose =
+      visible.length >= 9 &&
+      shoulders.length === 2 &&
+      hips.length >= 1 &&
+      (visibleHeadPoints >= 1 || visibleArmPoints >= 2) &&
+      landmarkConfidence >= 0.45;
 
     return [{
       bbox: [left, top, right - left, bottom - top],
-      score: 1,
+      score: clamp(landmarkConfidence, 0.45, 0.95),
       fromFullScan: scanArea?.kind === "full",
       relativeScanArea: ((right - left) * (bottom - top)) /
         Math.max(1, frame.sourceWidth * frame.sourceHeight),
       edgeCropped: false,
+      strongStandalonePose,
     }];
   });
 }
@@ -919,14 +931,17 @@ function boxMatchScore(first, second) {
 
 function boxesAreDuplicate(first, second) {
   const overlap = intersectionOverUnion(first, second);
-  if (overlap >= 0.45 || intersectionOverSmaller(first, second) >= 0.65) {
-    return true;
-  }
-
   const firstArea = boxArea(first);
   const secondArea = boxArea(second);
   const areaRatio = Math.max(firstArea, secondArea) /
     Math.max(1, Math.min(firstArea, secondArea));
+  if (
+    overlap >= 0.45 ||
+    (areaRatio <= 2.5 && intersectionOverSmaller(first, second) >= 0.65)
+  ) {
+    return true;
+  }
+
   if (areaRatio > 5) return false;
 
   const firstCenter = boxCenter(first);
@@ -982,19 +997,10 @@ function poseMatchQuality(detection, pose) {
 }
 
 function consolidateDetections(detections) {
-  const dominantFullFramePeople = detections.filter(
-    (detection) =>
-      detection.fromFullScan && detection.relativeScanArea >= 0.1,
-  );
-  const prepared = detections.filter((detection) => {
-    if (detection.fromFullScan) return true;
-    return !dominantFullFramePeople.some(
-      (fullDetection) =>
-        boxArea(detection.bbox) < boxArea(fullDetection.bbox) * 0.85 &&
-        centerIsInside(detection.bbox, fullDetection.bbox),
-    );
-  });
-  const countable = prepared.filter((detection) => !detection.edgeCropped);
+  // Keep smaller individual detections until after duplicate removal. A broad
+  // full-frame box can cover several overlapping people, so discarding the
+  // boxes inside it turns a crowd into one person.
+  const countable = detections.filter((detection) => !detection.edgeCropped);
   const sorted = [...countable].sort(
     (first, second) => second.score - first.score,
   );
@@ -1007,9 +1013,6 @@ function consolidateDetections(detections) {
   }
 
   return unique.filter((candidate) => {
-    if (candidate.fromFullScan && candidate.relativeScanArea >= 0.1) {
-      return true;
-    }
     const candidateArea = boxArea(candidate.bbox);
     const containedPeople = unique.filter((other) => {
       if (other === candidate) return false;
@@ -1308,7 +1311,6 @@ function detectLoop(token) {
     const poseWasAvailable = Boolean(state.poseLandmarker);
     const needsPoseVerification =
       poseWasAvailable &&
-      people.length > 0 &&
       performance.now() - state.lastPoseVerificationAt >=
         POSE_VERIFICATION_INTERVAL_MS;
     const now = performance.now();
@@ -1323,24 +1325,28 @@ function detectLoop(token) {
     }
     const verifiedPeople = !poseWasAvailable || !state.poseLandmarker
       ? people
-      : people.flatMap((detection) => {
-          let matchingPose = null;
+      : poseDetections.flatMap((pose) => {
+          let matchingDetection = null;
           let bestMatchQuality = 0;
-          for (const pose of poseDetections) {
+          for (const detection of people) {
             const quality = poseMatchQuality(detection, pose);
             if (quality > bestMatchQuality) {
-              matchingPose = pose;
+              matchingDetection = detection;
               bestMatchQuality = quality;
             }
           }
-          if (!matchingPose) return [];
+          if (!matchingDetection && !pose.strongStandalonePose) return [];
+          const source = matchingDetection || pose;
           return [{
-            ...detection,
-            // Multiple detector windows can describe the same person. Using
-            // the matched pose box gives them one shared identity and stops
-            // a full-body, torso, and tile box from becoming three people.
-            bbox: [...matchingPose.bbox],
-            relativeScanArea: boxArea(matchingPose.bbox) /
+            ...source,
+            // A detector can return one broad box around several overlapping
+            // people. Emit every verified pose so each visible person remains
+            // an independent candidate instead of selecting only one pose. A
+            // strong multi-keypoint pose can also recover a person that the
+            // object detector missed completely.
+            bbox: [...pose.bbox],
+            score: matchingDetection ? matchingDetection.score : pose.score,
+            relativeScanArea: boxArea(pose.bbox) /
               Math.max(1, frame.sourceWidth * frame.sourceHeight),
             edgeCropped: false,
             verifiedByPose: true,
@@ -1687,9 +1693,9 @@ async function createPoseLandmarker(vision, delegate) {
       delegate,
     },
     runningMode: "IMAGE",
-    numPoses: 10,
-    minPoseDetectionConfidence: 0.32,
-    minPosePresenceConfidence: 0.32,
+    numPoses: 15,
+    minPoseDetectionConfidence: 0.25,
+    minPosePresenceConfidence: 0.25,
     outputSegmentationMasks: false,
   });
 }
