@@ -41,7 +41,7 @@ shembot2/
 │
 └── lib/                                # Third-party libraries and models
     └── mediapipe/
-        ├── vision_bundle.mjs           # MediaPipe Vision SDK (bundled ES module)
+        ├── vision_bundle.js            # MediaPipe Vision SDK (bundled ES module)
         ├── wasm/                       # MediaPipe WASM runtime (filenames must not change)
         │   ├── vision_wasm_internal.js
         │   ├── vision_wasm_internal.wasm
