@@ -3,19 +3,39 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#0d0d0f" />
+    <meta name="theme-color" content="#f3f6ff" />
     <meta name="description" content="Private, on-device people counting from your phone or laptop camera." />
     <title>Shembot Vision Console</title>
-    <link rel="stylesheet" href="./assets/css/styles.css?v=20261119-console1" />
-    <script defer src="./src/js/boot.js?v=20261119-console2"></script>
+    <link rel="stylesheet" href="./assets/css/styles.css?v=20261120-panel-gap1" />
+    <script>
+      /* Universal range-progress tracker for custom slider fill */
+      function syncRangeProgress(el) {
+        var min = Number(el.min) || 0;
+        var max = Number(el.max) || 100;
+        var val = Number(el.value);
+        el.style.setProperty('--range-progress', ((val - min) / (max - min)) * 100 + '%');
+      }
+      document.addEventListener('input', function(e) {
+        if (e.target.type === 'range') syncRangeProgress(e.target);
+      });
+      document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('input[type="range"]').forEach(syncRangeProgress);
+      });
+    </script>
+    <script defer src="./src/js/boot.js?v=20261120-warm1"></script>
   </head>
   <body>
     <main class="app-shell">
       <section class="viewport-panel" id="overview" aria-label="Live camera workspace">
         <header class="viewport-header">
           <div class="workspace-title">
-            <span class="eyebrow">LIVE WORKSPACE</span>
-            <h1>Camera monitor</h1>
+            <span class="workspace-logo" aria-hidden="true">
+              <img src="./assets/images/shembot-logo.svg" alt="" />
+            </span>
+            <div class="workspace-brand-copy">
+              <h1>Shembot</h1>
+              <span>Camera monitor</span>
+            </div>
           </div>
 
           <div class="metric-strip" aria-label="Live detection summary">
@@ -65,15 +85,16 @@
               </div>
             </div>
 
-            <div class="viewport-actions">
-              <button class="primary-button" id="startButton" disabled>
-                <span class="button-icon">&#9679;</span> Start camera
-              </button>
-              <button class="icon-button" id="flipButton" aria-label="Switch camera" title="Switch camera" disabled>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.3 7H11V5H4v7h2V8.5A7 7 0 0 1 18.8 11h2A9 9 0 0 0 7.3 7ZM18 12v3.5A7 7 0 0 1 5.2 13h-2A9 9 0 0 0 16.7 17H13v2h7v-7h-2Z" /></svg>
-              </button>
-            </div>
           </section>
+
+          <div class="viewport-actions">
+            <button class="primary-button" id="startButton" disabled>
+              <span class="button-icon">&#9679;</span> Start camera
+            </button>
+            <button class="icon-button" id="flipButton" aria-label="Switch camera" title="Switch camera" disabled>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.3 7H11V5H4v7h2V8.5A7 7 0 0 1 18.8 11h2A9 9 0 0 0 7.3 7ZM18 12v3.5A7 7 0 0 1 5.2 13h-2A9 9 0 0 0 16.7 17H13v2h7v-7h-2Z" /></svg>
+            </button>
+          </div>
 
           <p class="error-message" id="errorMessage" role="alert" hidden></p>
         </div>
@@ -81,14 +102,9 @@
 
       <aside class="control-sidebar" aria-label="Shembot controls">
         <header class="sidebar-header">
-          <div class="brand-block">
-            <span class="brand-icon" aria-hidden="true">
-              <svg viewBox="0 0 24 24"><path d="M4 18V9h3v9H4Zm6 0V4h3v14h-3Zm6 0v-6h3v6h-3Z" /></svg>
-            </span>
-            <div>
-              <strong>Shembot</strong>
-              <span>Vision console</span>
-            </div>
+          <div class="sidebar-heading">
+            <strong>Controls</strong>
+            <span>Camera settings</span>
           </div>
 
           <div class="app-status" id="appStatus" data-tone="loading" title="Application status">
@@ -183,11 +199,14 @@
                 <span><small>Entered</small><strong id="enteredValue">0</strong></span>
                 <span><small>Exited</small><strong id="exitedValue">0</strong></span>
               </div>
-              <label class="range-heading" for="flowLineInput"><span><strong>Counting line</strong><small>Position in frame</small></span></label>
-              <input id="flowLineInput" type="range" min="20" max="80" value="60" />
+              <label class="range-heading" for="flowLineInput">
+                <span><strong>Counting line</strong><small>Position in frame</small></span>
+                <output id="flowLineOutput" for="flowLineInput">60%</output>
+              </label>
+              <input id="flowLineInput" type="range" min="20" max="80" value="60" style="--range-progress: 66.667%" />
               <div class="button-pair">
-                <button class="secondary-button" id="flowDirectionButton">Down = entry</button>
-                <button class="secondary-button" id="resetFlowButton">Reset</button>
+                <button class="secondary-button flow-direction-button" id="flowDirectionButton">Down = entry</button>
+                <button class="secondary-button flow-reset-button" id="resetFlowButton">Reset</button>
               </div>
             </div>
           </section>
