@@ -15,7 +15,11 @@
   --danger: #ff5266;
   --amber: #ffba49;
   --camera-bg: #05070b;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --workspace: #ffffff;
+  --workspace-soft: #f4f5f7;
+  --workspace-line: #e3e5e9;
+  --workspace-ink: #17181b;
+  font-family: "Aptos", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
 }
 
 * {
@@ -34,7 +38,9 @@ body {
 
 body {
   color: var(--text);
+  font-size: 16px;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -80,7 +86,7 @@ p {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(280px, 21.5vw, 370px);
+  grid-template-columns: minmax(0, 1fr) clamp(320px, 22vw, 400px);
   width: 100vw;
   height: 100vh;
   height: 100dvh;
@@ -92,23 +98,20 @@ p {
   min-width: 0;
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
-  background:
-    radial-gradient(circle at 20% 10%, rgba(64, 135, 255, 0.9), transparent 30%),
-    radial-gradient(circle at 82% 90%, rgba(0, 25, 92, 0.55), transparent 38%),
-    var(--blue);
+  color: var(--workspace-ink);
+  background: var(--workspace-soft);
   overflow: hidden;
 }
 
 .viewport-header {
   display: flex;
-  min-height: 84px;
+  min-height: 96px;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 18px clamp(20px, 2.4vw, 38px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(0, 40, 145, 0.22);
-  backdrop-filter: blur(16px);
+  padding: 20px clamp(24px, 2.8vw, 44px);
+  border-bottom: 1px solid var(--workspace-line);
+  background: var(--workspace);
 }
 
 .workspace-title {
@@ -118,16 +121,18 @@ p {
 .eyebrow {
   display: block;
   margin-bottom: 5px;
-  color: rgba(255, 255, 255, 0.66);
-  font-size: 0.7rem;
-  font-weight: 750;
+  color: var(--blue);
+  font-size: 0.78rem;
+  font-weight: 800;
   letter-spacing: 0.13em;
 }
 
 .workspace-title h1 {
-  font-size: clamp(1.25rem, 2vw, 1.65rem);
-  line-height: 1;
-  letter-spacing: -0.035em;
+  font-family: "Aptos Display", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  font-size: clamp(1.65rem, 2.4vw, 2.15rem);
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.04em;
 }
 
 .metric-strip {
@@ -139,25 +144,25 @@ p {
 
 .metric {
   display: grid;
-  min-width: 112px;
+  min-width: 126px;
   align-content: center;
   gap: 3px;
-  padding: 9px 13px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 11px;
-  background: rgba(0, 20, 72, 0.26);
-  backdrop-filter: blur(12px);
+  padding: 11px 15px;
+  border: 1px solid var(--workspace-line);
+  border-radius: 12px;
+  color: var(--workspace-ink);
+  background: #f7f8fa;
 }
 
 .metric span {
-  color: rgba(255, 255, 255, 0.63);
-  font-size: 0.7rem;
-  font-weight: 650;
+  color: #676b73;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 .metric strong {
   overflow: hidden;
-  font-size: 0.84rem;
+  font-size: 0.96rem;
   line-height: 1.15;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -176,12 +181,13 @@ p {
 .metric-primary strong {
   grid-row: 1 / span 2;
   grid-column: 2;
-  font-size: 1.7rem;
+  color: var(--blue);
+  font-size: 2rem;
   letter-spacing: -0.06em;
 }
 
 .metric-status {
-  min-width: 132px;
+  min-width: 150px;
 }
 
 .camera-zone {
@@ -189,6 +195,7 @@ p {
   min-width: 0;
   min-height: 0;
   padding: clamp(16px, 2.2vw, 34px);
+  background: var(--workspace-soft);
 }
 
 .camera-card {
@@ -196,10 +203,10 @@ p {
   width: 100%;
   height: 100%;
   min-height: 0;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid #d8dbe1;
   border-radius: 22px;
   background: var(--camera-bg);
-  box-shadow: 0 28px 70px rgba(0, 20, 70, 0.34);
+  box-shadow: 0 22px 55px rgba(18, 25, 38, 0.16);
   overflow: hidden;
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }
@@ -260,6 +267,7 @@ canvas.overlay-disabled {
 }
 
 .empty-state {
+  color: #ffffff;
   background:
     radial-gradient(circle at center, rgba(0, 85, 255, 0.16), transparent 34%),
     linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
@@ -288,24 +296,43 @@ canvas.overlay-disabled {
 
 .empty-state h2 {
   margin-bottom: 8px;
-  font-size: clamp(1.3rem, 2vw, 1.75rem);
+  font-family: "Aptos Display", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  font-size: clamp(1.65rem, 2.4vw, 2.15rem);
+  font-weight: 700;
   letter-spacing: -0.04em;
 }
 
 .empty-state p {
   max-width: 390px;
   color: var(--muted-bright);
-  font-size: 0.88rem;
+  font-size: 1rem;
   line-height: 1.55;
 }
 
 .model-loading {
+  inset: 20px auto auto 50%;
   display: flex;
+  width: max-content;
+  max-width: calc(100% - 40px);
+  align-items: center;
   gap: 11px;
+  padding: 11px 15px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
   color: #ececf1;
-  background: rgba(6, 8, 13, 0.94);
-  font-size: 0.86rem;
+  background: rgba(13, 13, 15, 0.88);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(14px);
+  font-size: 0.94rem;
   font-weight: 700;
+  transform: translateX(-50%);
+}
+
+.model-loading > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .spinner {
@@ -343,7 +370,7 @@ canvas.overlay-disabled {
   color: #fff;
   background: rgba(8, 8, 11, 0.72);
   backdrop-filter: blur(12px);
-  font-size: 0.69rem;
+  font-size: 0.78rem;
   font-weight: 800;
   letter-spacing: 0.08em;
 }
@@ -391,7 +418,7 @@ canvas.overlay-disabled {
   min-width: 154px;
   padding: 0 20px;
   background: var(--blue);
-  font-size: 0.84rem;
+  font-size: 0.96rem;
   font-weight: 750;
   transition: background 150ms ease, transform 150ms ease;
 }
@@ -445,7 +472,7 @@ canvas.overlay-disabled {
   border-radius: 10px;
   color: #fff;
   background: rgba(13, 13, 15, 0.92);
-  font-size: 0.84rem;
+  font-size: 0.94rem;
   font-weight: 700;
   text-align: center;
   transform: translate(-50%, -50%);
@@ -483,7 +510,7 @@ canvas.overlay-disabled {
 
 .control-sidebar {
   display: grid;
-  min-width: 280px;
+  min-width: 320px;
   min-height: 0;
   grid-template-rows: auto auto minmax(0, 1fr);
   border-left: 1px solid var(--line-soft);
@@ -493,7 +520,7 @@ canvas.overlay-disabled {
 
 .sidebar-header {
   display: flex;
-  min-height: 76px;
+  min-height: 84px;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -536,13 +563,15 @@ canvas.overlay-disabled {
 }
 
 .brand-block strong {
-  font-size: 0.92rem;
+  font-family: "Aptos Display", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+  font-size: 1.08rem;
+  font-weight: 700;
   letter-spacing: -0.02em;
 }
 
 .brand-block span:last-child {
   color: var(--muted);
-  font-size: 0.73rem;
+  font-size: 0.82rem;
 }
 
 .app-status {
@@ -555,7 +584,7 @@ canvas.overlay-disabled {
   border-radius: 999px;
   color: var(--muted-bright);
   background: #131316;
-  font-size: 0.67rem;
+  font-size: 0.76rem;
   font-weight: 700;
 }
 
@@ -580,7 +609,7 @@ canvas.overlay-disabled {
 
 .search-box {
   display: flex;
-  height: 40px;
+  height: 46px;
   align-items: center;
   gap: 9px;
   margin: 12px 14px;
@@ -610,7 +639,7 @@ canvas.overlay-disabled {
   outline: 0;
   color: #fff;
   background: transparent;
-  font-size: 0.82rem;
+  font-size: 0.92rem;
 }
 
 .search-box input::placeholder {
@@ -655,7 +684,7 @@ canvas.overlay-disabled {
 .control-section > h2 {
   margin: 0 8px 8px;
   color: #6f6f76;
-  font-size: 0.66rem;
+  font-size: 0.75rem;
   font-weight: 800;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -664,7 +693,7 @@ canvas.overlay-disabled {
 .control-row,
 .sidebar-disclosure > summary {
   display: flex;
-  min-height: 52px;
+  min-height: 60px;
   align-items: center;
   gap: 10px;
   padding: 8px;
@@ -684,13 +713,13 @@ canvas.overlay-disabled {
 }
 
 .row-icon {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
 }
 
 .row-icon svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
 }
 
 .row-icon-blue { color: #79a4ff; background: rgba(0, 85, 255, 0.16); }
@@ -709,9 +738,9 @@ canvas.overlay-disabled {
 .row-copy strong,
 .range-heading strong {
   color: #eeeef1;
-  font-size: 0.82rem;
-  font-weight: 650;
-  line-height: 1.2;
+  font-size: 0.94rem;
+  font-weight: 700;
+  line-height: 1.25;
 }
 
 .row-copy small,
@@ -720,8 +749,8 @@ canvas.overlay-disabled {
 .privacy-note small {
   overflow: hidden;
   color: var(--muted);
-  font-size: 0.71rem;
-  line-height: 1.3;
+  font-size: 0.9rem;
+  line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -730,7 +759,7 @@ canvas.overlay-disabled {
 .status-tag {
   flex: 0 0 auto;
   border-radius: 7px;
-  font-size: 0.67rem;
+  font-size: 0.76rem;
   font-weight: 750;
 }
 
@@ -780,12 +809,12 @@ canvas.overlay-disabled {
 }
 
 .secondary-button {
-  min-height: 32px;
+  min-height: 36px;
   padding: 0 9px;
   border: 1px solid #303036;
   border-radius: 8px;
   background: #1b1b1f;
-  font-size: 0.7rem;
+  font-size: 0.8rem;
   font-weight: 700;
 }
 
@@ -857,7 +886,7 @@ canvas.overlay-disabled {
 }
 
 .quality-assistant strong {
-  font-size: 0.75rem;
+  font-size: 0.86rem;
 }
 
 .quality-assistant.is-warning {
@@ -908,7 +937,7 @@ canvas.overlay-disabled {
 
 .range-heading output {
   color: #a9c2ff;
-  font-size: 0.71rem;
+  font-size: 0.82rem;
   font-weight: 700;
 }
 
@@ -942,11 +971,11 @@ input[type="range"] {
 
 .flow-counts small {
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.78rem;
 }
 
 .flow-counts strong {
-  font-size: 1.15rem;
+  font-size: 1.35rem;
   letter-spacing: -0.04em;
 }
 
@@ -986,7 +1015,7 @@ input[type="range"] {
 
 .disclosure-body p {
   color: var(--muted);
-  font-size: 0.69rem;
+  font-size: 0.8rem;
   line-height: 1.4;
 }
 
@@ -996,7 +1025,7 @@ input[type="range"] {
   justify-content: space-between;
   gap: 10px;
   color: var(--muted-bright);
-  font-size: 0.72rem;
+  font-size: 0.82rem;
 }
 
 .number-field input {
@@ -1036,19 +1065,19 @@ input[type="range"] {
 
 .privacy-note strong {
   color: var(--muted-bright);
-  font-size: 0.74rem;
+  font-size: 0.86rem;
 }
 
 .no-results {
   padding: 30px 16px;
   color: var(--muted);
-  font-size: 0.78rem;
+  font-size: 0.88rem;
   text-align: center;
 }
 
 @media (max-width: 1100px) {
   .app-shell {
-    grid-template-columns: minmax(0, 1fr) 310px;
+    grid-template-columns: minmax(0, 1fr) 340px;
   }
 
   .metric {
@@ -1130,7 +1159,7 @@ input[type="range"] {
   }
 
   .workspace-title h1 {
-    font-size: 1.08rem;
+    font-size: 1.3rem;
   }
 
   .metric-primary {
@@ -1148,6 +1177,13 @@ input[type="range"] {
 
   .camera-zone {
     padding: 7px 9px 10px;
+  }
+
+  .model-loading {
+    top: 12px;
+    width: calc(100% - 24px);
+    max-width: none;
+    justify-content: center;
   }
 
   .viewport-actions {
