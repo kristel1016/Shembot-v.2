@@ -4,9 +4,18 @@ import {
   PoseLandmarker,
 } from "../../lib/mediapipe/vision_bundle.mjs";
 
-const MEDIAPIPE_WASM = "../../lib/mediapipe/wasm";
-const MODEL_PATH = "../../lib/mediapipe/models/efficientdet_lite0.tflite";
-const POSE_MODEL_PATH = "../../lib/mediapipe/models/pose_landmarker_lite.task";
+const MEDIAPIPE_WASM = new URL(
+  "../../lib/mediapipe/wasm",
+  import.meta.url,
+).href;
+const MODEL_PATH = new URL(
+  "../../lib/mediapipe/models/efficientdet_lite0.tflite",
+  import.meta.url,
+).href;
+const POSE_MODEL_PATH = new URL(
+  "../../lib/mediapipe/models/pose_landmarker_lite.task",
+  import.meta.url,
+).href;
 const MAX_INFERENCE_DIMENSION = 512;
 const TRACK_HOLD_MS = 3400;
 const RECALIBRATE_AFTER_MS = 4000;
