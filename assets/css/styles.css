@@ -2,12 +2,12 @@
 
 :root {
   color-scheme: light;
-  --background: #f7f5f0;
-  --surface: #efece4;
-  --ink: #181816;
-  --muted-ink: #63615b;
-  --accent: #c7772c;
-  --border: #e0ddd5;
+  --background: #fffbfc;
+  --surface: #d9e2e9;
+  --ink: #0c1d32;
+  --muted-ink: #007aad;
+  --accent: #007aad;
+  --border: #d9e2e9;
   --navy: var(--ink);
   --medium-blue: var(--accent);
   --off-white: var(--background);
@@ -144,7 +144,7 @@ p {
 .eyebrow {
   display: block;
   margin-bottom: 5px;
-  color: var(--accent);
+  color: var(--surface);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-size: 0.75rem;
   font-weight: 700;
@@ -209,7 +209,7 @@ p {
 .metric-primary strong {
   grid-row: 1 / span 2;
   grid-column: 2;
-  color: var(--accent);
+  color: var(--surface);
   font-size: 2rem;
   letter-spacing: -0.06em;
 }
@@ -441,7 +441,7 @@ canvas.overlay-disabled {
 .primary-button {
   min-width: 154px;
   padding: 0 20px;
-  color: var(--ink);
+  color: var(--background);
   background: var(--accent);
   font-size: 1rem;
   font-weight: 750;
@@ -496,7 +496,7 @@ canvas.overlay-disabled {
   inset: 0;
   cursor: crosshair;
   touch-action: none;
-  background: rgba(24, 24, 22, 0.58);
+  background: rgba(12, 29, 50, 0.58);
 }
 
 .zone-selection > span {
@@ -524,8 +524,8 @@ canvas.overlay-disabled {
   position: absolute;
   border: 2px solid var(--accent);
   border-radius: 8px;
-  background: rgba(199, 119, 44, 0.12);
-  box-shadow: 0 0 0 9999px rgba(24, 24, 22, 0.38);
+  background: rgba(0, 122, 173, 0.12);
+  box-shadow: 0 0 0 9999px rgba(12, 29, 50, 0.38);
   pointer-events: none;
 }
 
@@ -585,7 +585,7 @@ canvas.overlay-disabled {
 .brand-icon {
   width: 40px;
   height: 40px;
-  color: var(--accent);
+  color: var(--surface);
   background: transparent;
   box-shadow: none;
 }
@@ -723,7 +723,7 @@ canvas.overlay-disabled {
 
 .control-section > h2 {
   margin: 0 8px 8px;
-  color: var(--accent);
+  color: var(--surface);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-size: 0.75rem;
   font-weight: 700;
@@ -813,7 +813,7 @@ canvas.overlay-disabled {
 }
 
 .row-button:hover:not(:disabled) {
-  color: var(--ink);
+  color: var(--background);
   background: var(--background);
 }
 
@@ -985,7 +985,7 @@ canvas.overlay-disabled {
 }
 
 .range-heading output {
-  color: var(--sky-blue);
+  color: var(--surface);
   font-size: 0.88rem;
   font-weight: 700;
 }
