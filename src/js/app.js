@@ -2,7 +2,7 @@ import {
   FilesetResolver,
   ObjectDetector,
   PoseLandmarker,
-} from "../../lib/mediapipe/vision_bundle.mjs";
+} from "../../lib/mediapipe/vision_bundle.js";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -38,6 +38,7 @@ const elements = {
   modelStatus: document.querySelector("#modelStatus"),
   startButton: document.querySelector("#startButton"),
   flipButton: document.querySelector("#flipButton"),
+  sidebarFlipButton: document.querySelector("#sidebarFlipButton"),
   setAreaButton: document.querySelector("#setAreaButton"),
   clearAreaButton: document.querySelector("#clearAreaButton"),
   areaStatus: document.querySelector("#areaStatus"),
@@ -65,6 +66,8 @@ const elements = {
   downloadHistoryButton: document.querySelector("#downloadHistoryButton"),
   clearHistoryButton: document.querySelector("#clearHistoryButton"),
   errorMessage: document.querySelector("#errorMessage"),
+  appStatus: document.querySelector("#appStatus"),
+  appStatusLabel: document.querySelector("#appStatusLabel"),
 };
 
 const inferenceCanvas = document.createElement("canvas");
@@ -197,6 +200,11 @@ function showError(message) {
 function clearError() {
   elements.errorMessage.hidden = true;
   elements.errorMessage.textContent = "";
+}
+
+function updateAppStatus(label, tone) {
+  elements.appStatusLabel.textContent = label;
+  elements.appStatus.dataset.tone = tone;
 }
 
 function median(values) {
@@ -1444,13 +1452,15 @@ async function startCamera() {
     elements.emptyState.hidden = true;
     elements.hud.hidden = false;
     elements.flipButton.disabled = false;
+    elements.sidebarFlipButton.disabled = false;
     elements.setAreaButton.disabled = false;
     elements.correctFeedbackButton.disabled = false;
     elements.issueFeedbackButton.disabled = false;
     elements.feedbackStatus.textContent = "Samples stay on this device.";
     elements.startButton.classList.add("is-running");
     elements.startButton.innerHTML =
-      '<span class="button-icon">■</span> Stop camera';
+      '<span class="button-icon">&#9632;</span> Stop camera';
+    updateAppStatus("Camera live", "live");
     updateAreaControls();
     await requestWakeLock();
     beginOrientationCalibration();
@@ -1462,6 +1472,7 @@ async function startCamera() {
         ? "Camera permission was denied. Allow camera access in the browser's site settings and try again."
         : "The camera could not start. Close other apps using the camera, then try again.";
     showError(guidance);
+    updateAppStatus("Camera error", "error");
   }
 }
 
@@ -1492,13 +1503,15 @@ function stopCamera() {
   elements.hud.hidden = true;
   elements.emptyState.hidden = false;
   elements.flipButton.disabled = true;
+  elements.sidebarFlipButton.disabled = true;
   elements.setAreaButton.disabled = true;
   elements.clearAreaButton.disabled = true;
   elements.correctFeedbackButton.disabled = true;
   elements.issueFeedbackButton.disabled = true;
   elements.startButton.classList.remove("is-running");
   elements.startButton.innerHTML =
-    '<span class="button-icon">●</span> Start camera';
+    '<span class="button-icon">&#9679;</span> Start camera';
+  updateAppStatus("Ready", "ready");
   elements.cameraCard.classList.remove("is-alert");
   updateQualityUi(
     "waiting",
@@ -1587,6 +1600,7 @@ elements.startButton.addEventListener("click", () => {
   else startCamera();
 });
 elements.flipButton.addEventListener("click", flipCamera);
+elements.sidebarFlipButton.addEventListener("click", flipCamera);
 elements.setAreaButton.addEventListener("click", startAreaSelection);
 elements.clearAreaButton.addEventListener("click", clearArea);
 elements.camera.addEventListener("loadedmetadata", syncCanvas);
@@ -1631,6 +1645,61 @@ elements.clearHistoryButton.addEventListener("click", () => {
   state.lastLoggedCount = null;
   localStorage.removeItem("crowdCountHistory");
   updateHistoryUi();
+});
+
+const overlayToggle = document.querySelector("#detectionOverlayToggle");
+const qualityToggle = document.querySelector("#qualityAssistantToggle");
+const sidebarSearch = document.querySelector("#sidebarSearch");
+const noControlResults = document.querySelector("#noControlResults");
+const privacyNote = document.querySelector("#privacy");
+
+overlayToggle.addEventListener("change", () => {
+  elements.overlay.classList.toggle("overlay-disabled", !overlayToggle.checked);
+});
+
+qualityToggle.addEventListener("change", () => {
+  elements.qualityAssistant.classList.toggle(
+    "is-collapsed",
+    !qualityToggle.checked,
+  );
+});
+
+function filterSidebarControls() {
+  const query = sidebarSearch.value.trim().toLowerCase();
+  let visibleItems = 0;
+
+  document.querySelectorAll("[data-control-section]").forEach((section) => {
+    let sectionMatches = 0;
+    section.querySelectorAll(":scope > [data-control-item]").forEach((item) => {
+      const matches = !query || item.dataset.search.includes(query);
+      item.hidden = !matches;
+      if (matches) sectionMatches += 1;
+    });
+    section.hidden = sectionMatches === 0;
+    visibleItems += sectionMatches;
+  });
+
+  privacyNote.hidden = Boolean(query);
+  noControlResults.hidden = visibleItems !== 0;
+}
+
+sidebarSearch.addEventListener("input", filterSidebarControls);
+document.addEventListener("keydown", (event) => {
+  const isTyping = /input|textarea|select/i.test(event.target.tagName);
+  if (
+    !isTyping &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    event.key.toLowerCase() === "f"
+  ) {
+    event.preventDefault();
+    sidebarSearch.focus();
+  }
+  if (event.key === "Escape" && document.activeElement === sidebarSearch) {
+    sidebarSearch.value = "";
+    filterSidebarControls();
+    sidebarSearch.blur();
+  }
 });
 
 elements.zoneSelection.addEventListener("pointerdown", (event) => {
@@ -1711,6 +1780,7 @@ async function createPoseLandmarker(vision, delegate) {
 
 async function loadModel() {
   try {
+    updateAppStatus("Loading", "loading");
     elements.modelStatus.textContent = "Loading fast mobile person detector...";
     const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM);
 
@@ -1740,9 +1810,11 @@ async function loadModel() {
 
     elements.modelLoading.hidden = true;
     elements.startButton.disabled = false;
+    updateAppStatus("Ready", "ready");
   } catch (error) {
     console.error(error);
     elements.modelStatus.textContent = "Detector could not load";
+    updateAppStatus("Model error", "error");
     showError(
       "The detection model could not load. Check the internet connection and reload the page.",
     );
