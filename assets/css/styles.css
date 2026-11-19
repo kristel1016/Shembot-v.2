@@ -109,13 +109,15 @@ p {
 
 .app-shell {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(380px, 26vw, 430px);
+  grid-template-columns: minmax(0, 1fr) clamp(380px, 26%, 430px);
   gap: 10px;
   width: 100vw;
   height: 100vh;
   height: 100dvh;
   padding: 16px;
   overflow: hidden;
+  transform: scale(var(--ui-scale, 1));
+  transform-origin: top left;
 }
 
 /* ═══════════════════════════════════════
