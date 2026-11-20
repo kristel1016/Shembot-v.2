@@ -1,5 +1,6 @@
 .venv/
 .venv-train/
+.matplotlib/
 __pycache__/
 *.py[cod]
 .DS_Store

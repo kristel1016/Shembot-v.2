@@ -383,17 +383,42 @@ function saveFeedback(isCorrect) {
   }
   captureContext.drawImage(elements.camera, 0, 0, width, height);
   captureContext.restore();
-  captureContext.drawImage(elements.overlay, 0, 0, width, height);
+  const timestamp = new Date().toISOString();
+  const fileTimestamp = timestamp.replaceAll(":", "-");
+  const fileStem =
+    `crowd-sample-actual-${actualCount}-detected-${detectedCount}-${fileTimestamp}`;
   captureCanvas.toBlob((blob) => {
     if (!blob) return;
-    const timestamp = new Date().toISOString().replaceAll(":", "-");
-    downloadBlob(
-      blob,
-      `crowd-sample-actual-${actualCount}-detected-${detectedCount}-${timestamp}.png`,
-    );
-  }, "image/png");
+    downloadBlob(blob, `${fileStem}.jpg`);
+  }, "image/jpeg", 0.92);
+  const metadata = {
+    schemaVersion: 1,
+    timestamp,
+    image: `${fileStem}.jpg`,
+    width,
+    height,
+    detectedCount,
+    actualCount,
+    mirrored: state.mirrored,
+    rotation: state.rotation,
+    detectionArea: state.area,
+    detections: state.lastConfirmedTracks.map((track) => ({
+      id: track.id,
+      bbox: track.bbox.map((value) => Math.round(value * 100) / 100),
+      score: Math.round(track.score * 10000) / 10000,
+      maxScore: Math.round(track.maxScore * 10000) / 10000,
+      hits: track.hits,
+      poseHits: track.poseHits,
+    })),
+  };
+  downloadBlob(
+    new Blob([JSON.stringify(metadata, null, 2)], {
+      type: "application/json;charset=utf-8",
+    }),
+    `${fileStem}.json`,
+  );
   elements.feedbackStatus.textContent =
-    "Incorrect sample downloaded locally and added to the history.";
+    "Clean frame and detection metadata downloaded locally.";
 }
 
 function resetTracking() {
@@ -1389,7 +1414,7 @@ function detectLoop(token) {
 
     const minimumScore = scanArea?.kind === "full"
       ? (state.poseLandmarker ? 0.26 : FULL_FRAME_SCORE_FLOOR)
-      : (state.poseLandmarker ? 0.22 : ZOOMED_SCORE_FLOOR);
+      : (state.poseLandmarker ? 0.26 : ZOOMED_SCORE_FLOOR);
     const people = (result.detections || [])
       .filter((detection) => isPlausiblePerson(detection, frame, minimumScore))
       .map((detection) => {

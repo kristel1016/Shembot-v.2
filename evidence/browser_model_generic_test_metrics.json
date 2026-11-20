@@ -1,0 +1,76 @@
+{
+  "model": "C:\\Computer Vision\\kristel-shembot-repo\\lib\\mediapipe\\models\\efficientdet_lite0.tflite",
+  "dataset": "C:\\Computer Vision\\training_data\\cctv_indoor_clean_v2\\test",
+  "split": "locked test",
+  "images": 133,
+  "ground_truth_people": 1056,
+  "matching_iou_threshold": 0.5,
+  "threshold_results": [
+    {
+      "confidence_threshold": 0.18,
+      "true_positives": 251,
+      "false_positives": 753,
+      "false_negatives": 805,
+      "precision": 0.25,
+      "recall": 0.23768939393939395,
+      "f1": 0.24368932038834953,
+      "count_mae": 3.5488721804511276
+    },
+    {
+      "confidence_threshold": 0.22,
+      "true_positives": 206,
+      "false_positives": 410,
+      "false_negatives": 850,
+      "precision": 0.3344155844155844,
+      "recall": 0.19507575757575757,
+      "f1": 0.24641148325358853,
+      "count_mae": 3.969924812030075
+    },
+    {
+      "confidence_threshold": 0.26,
+      "true_positives": 167,
+      "false_positives": 263,
+      "false_negatives": 889,
+      "precision": 0.3883720930232558,
+      "recall": 0.1581439393939394,
+      "f1": 0.22476446837146705,
+      "count_mae": 5.007518796992481
+    },
+    {
+      "confidence_threshold": 0.3,
+      "true_positives": 136,
+      "false_positives": 153,
+      "false_negatives": 920,
+      "precision": 0.47058823529411764,
+      "recall": 0.12878787878787878,
+      "f1": 0.20223048327137544,
+      "count_mae": 5.842105263157895
+    },
+    {
+      "confidence_threshold": 0.38,
+      "true_positives": 82,
+      "false_positives": 53,
+      "false_negatives": 974,
+      "precision": 0.6074074074074074,
+      "recall": 0.07765151515151515,
+      "f1": 0.1376994122586062,
+      "count_mae": 6.924812030075188
+    },
+    {
+      "confidence_threshold": 0.5,
+      "true_positives": 30,
+      "false_positives": 5,
+      "false_negatives": 1026,
+      "precision": 0.8571428571428571,
+      "recall": 0.028409090909090908,
+      "f1": 0.054995417048579284,
+      "count_mae": 7.676691729323308
+    }
+  ],
+  "best_f1_threshold": 0.22,
+  "ap50": 0.15458819274877994,
+  "map50_95": 0.04996095503209303,
+  "mean_inference_ms": 71.87868496240606,
+  "mean_fps": 13.912330206416817,
+  "scope": "detector only; browser pose and temporal filtering excluded"
+}

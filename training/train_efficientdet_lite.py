@@ -47,6 +47,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-whole-model", action="store_true")
     parser.add_argument("--learning-rate", type=float)
     parser.add_argument(
+        "--max-instances-per-image",
+        type=int,
+        default=100,
+        help="Maximum ground-truth boxes accepted in one training image.",
+    )
+    parser.add_argument(
         "--load-checkpoint",
         type=Path,
         help="Load detector weights and skip training (for best-checkpoint export).",
@@ -130,6 +136,7 @@ def main() -> None:
         "base_model": "efficientdet-lite0",
         "train_whole_model": args.train_whole_model,
         "learning_rate": args.learning_rate,
+        "max_instances_per_image": args.max_instances_per_image,
         "continue_training": args.continue_training,
         "loaded_checkpoint": (
             str(args.load_checkpoint.resolve()) if args.load_checkpoint else None
@@ -141,6 +148,9 @@ def main() -> None:
     print(json.dumps(run, indent=2))
 
     hparams = {}
+    if args.max_instances_per_image < 2:
+        raise SystemExit("--max-instances-per-image must be at least 2")
+    hparams["max_instances_per_image"] = args.max_instances_per_image
     if args.learning_rate is not None:
         hparams["learning_rate"] = args.learning_rate
         hparams["lr_warmup_init"] = args.learning_rate / 10.0

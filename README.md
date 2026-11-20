@@ -98,6 +98,14 @@ These are intentionally reported as honest checkpoint results. Multi-scale
 inference improves recall, F1, AP, and count error, but it remains too slow for
 real-time CPU use and still misses many small or heavily occluded people.
 
+The current browser TFLite detector has also been evaluated through the exact
+MediaPipe inference path used by the site. On the same locked 133-image test
+split, at confidence `0.26`, it achieves **40.89% precision, 28.69% recall,
+33.72% F1, 24.49% AP50, 8.18% mAP50-95, 4.20 count MAE, and 31.64 CPU FPS**.
+These detector-only figures exclude the browser pose verifier, duplicate
+suppression, and temporal confirmation. Full comparison details are in
+[`training/EXPERIMENT_RESULTS.md`](training/EXPERIMENT_RESULTS.md).
+
 Milestone 3 evidence is mapped in `MILESTONE_3.md`; the full report is in
 `reports/MILESTONE_3_REPORT.md` and the generated metrics/failure gallery are
 under `outputs/milestone3_final/`.
