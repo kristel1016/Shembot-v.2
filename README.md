@@ -17,6 +17,47 @@ vendored MediaPipe runtime, detector model, pose model, checkpoint reports,
 dataset audit, training scripts, measured baselines, and smoke tests are all
 included.
 
+## Milestone 4 — application, evaluation, and documentation
+
+> **✓ One usable application exposes the complete evaluated pipeline.**
+
+Clone the exact 80% checkpoint and run the editable Gradio interface. The
+model is loaded and warmed once; each result shows annotated person boxes,
+confidence, count, processing time, and FPS.
+
+```powershell
+git clone --branch cp4-80 https://github.com/kristel1016/Shembot-v.2.git
+cd Shembot-v.2
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-app.txt
+python src/gradio_app.py
+```
+
+The public mobile interface remains available without localhost:
+
+**<https://kristel1016.github.io/Shembot-v.2/>**
+
+Reproduce the locked 133-image test result and regenerate the report assets:
+
+```powershell
+python src/evaluate.py --split test --weights evaluation/models/object_detection_yolox_2022nov_int8.onnx --output outputs/milestone4_final
+python -m pip install -r requirements-docs.txt
+python tools/create_milestone4_assets.py
+python -m unittest tests.test_milestone4_artifacts -v
+```
+
+| Method | Precision | Recall | F1 | AP50 | mAP50–95 | Count MAE | CPU FPS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Single-scale baseline | 0.5984 | 0.0720 | 0.1285 | 0.0619 | 0.0283 | 7.0000 | 2.25 |
+| Integrated multi-scale core | 0.5308 | 0.1468 | 0.2300 | 0.1166 | 0.0473 | 5.8346 | 0.44 |
+
+The application is complete enough to demonstrate, but the evidence is
+deliberately honest: low light, dense crowds, small/distant people, and
+look-alike objects remain limitations. See `MILESTONE_4.md`,
+`reports/MILESTONE_4_REPORT.docx`, `reports/MILESTONE_4_SLIDES.pptx`,
+`tests/milestone4_test_cases.csv`, and `docs/remaining.md`.
+
 ## Milestone 3 — core implementation and testing
 
 > **✓ One command takes raw input to visible annotated output.**

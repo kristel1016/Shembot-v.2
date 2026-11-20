@@ -1,0 +1,6 @@
+condition,images,ground_truth_people,true_positives,false_positives,false_negatives,precision,recall,f1,count_mae,mean_inference_ms
+Dense crowd / occlusion,36,615,83,63,532,0.568493,0.134959,0.218134,13.027778,2279.156
+Low light,13,85,7,10,78,0.411765,0.082353,0.137255,5.230769,2262.534
+Partial person at edge,11,41,10,2,31,0.833333,0.243902,0.377358,2.636364,2273.377
+Small or distant people,56,288,51,53,237,0.490385,0.177083,0.260204,3.428571,2275.155
+Standard indoor view,17,27,4,9,23,0.307692,0.148148,0.2,1.058824,2266.085

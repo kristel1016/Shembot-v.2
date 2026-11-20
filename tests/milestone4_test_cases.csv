@@ -1,0 +1,13 @@
+id,input,condition,hard_case,expected_people,actual_people,true_positives,false_positives,false_negatives,count_pass,notes
+TC01,images_relax2_234_jpg.rf.582e29ccc85931d36be3857062d153e5.jpg,Standard indoor view,No,1,1,0,1,1,PASS,Count matches; inspect localization separately.
+TC02,images_relax_3_1020_2_jpg.rf.197b0c57d175d6a7fdadcc3442686100.jpg,Standard indoor view,No,3,0,0,0,3,FAIL,Count mismatch retained as limitation evidence.
+TC03,images_AI_1_150_2_jpg.rf.067abf9378ef6ee2649549cb8b6e6bbf.jpg,Partial person at edge,Yes,5,4,3,1,2,FAIL,Count mismatch retained as limitation evidence.
+TC04,images_AI_1_150_2_jpg.rf.6c148df4f83ab5c330c1b29437e1e26c.jpg,Partial person at edge,Yes,5,0,0,0,5,FAIL,Count mismatch retained as limitation evidence.
+TC05,images_design_1440_2_jpg.rf.de71708466e1c2151b2e4394bab0d05e.jpg,Low light,Yes,5,5,1,4,4,PASS,Count matches; inspect localization separately.
+TC06,images_relaxFaceX_72_jpg.rf.9f9741786462a168db3d88c9b2975ce5.jpg,Low light,Yes,12,2,2,0,10,FAIL,Count mismatch retained as limitation evidence.
+TC07,images_AI_2_210_2_jpg.rf.2b09dbb03b260ac93e5e1aae697a4dc2.jpg,Small or distant people,Yes,6,5,3,2,3,FAIL,Count mismatch retained as limitation evidence.
+TC08,images_MKT_510_2_jpg.rf.649e71f592ce3c621b4888c096d4e55d.jpg,Small or distant people,Yes,8,1,0,1,8,FAIL,Count mismatch retained as limitation evidence.
+TC09,images_hanh_lang_570_2_jpg.rf.d848f884b87a7ad426245b14507859ab.jpg,Dense crowd / occlusion,Yes,10,6,2,4,8,FAIL,Count mismatch retained as limitation evidence.
+TC10,images_relaxFaceX_48_2_jpg.rf.ebb537cc09b0ee0ea99a8c22dd567fdc.jpg,Dense crowd / occlusion,Yes,27,2,2,0,25,FAIL,Count mismatch retained as limitation evidence.
+TC11,images_relax_3_240_2_jpg.rf.494f23a89fe79e8291bb89fddb0824ed.jpg,Small or distant people,Yes,5,2,2,0,3,FAIL,Count mismatch retained as limitation evidence.
+TC12,images_relaxFaceX_72_jpg.rf.69ce79862109f5d5664f65781d702aa3.jpg,Dense crowd / occlusion,Yes,12,2,1,1,11,FAIL,Count mismatch retained as limitation evidence.

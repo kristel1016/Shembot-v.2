@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
+import random
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -28,9 +30,10 @@ def parse_args() -> argparse.Namespace:
         "--annotations", type=Path, default=ROOT / "data" / "test" / "annotations"
     )
     parser.add_argument(
-        "--model", type=Path,
+        "--model", "--weights", dest="model", type=Path,
         default=ROOT / "evaluation" / "models" / "object_detection_yolox_2022nov_int8.onnx",
     )
+    parser.add_argument("--split", choices=("test",), default="test")
     parser.add_argument("--output", type=Path, default=ROOT / "outputs" / "milestone3")
     parser.add_argument("--confidence", type=float, default=0.10)
     parser.add_argument("--nms", type=float, default=0.50)
@@ -145,6 +148,21 @@ def image_characteristics(
     }
 
 
+def condition_label(row: dict[str, object]) -> str:
+    """Assign one deterministic primary operating condition to an image."""
+    if float(row["mean_brightness"]) < 65.0:
+        return "Low light"
+    if float(row["blur_variance"]) < 75.0:
+        return "Blur / low detail"
+    if int(row["ground_truth"]) >= 10:
+        return "Dense crowd / occlusion"
+    if float(row["smallest_gt_area_ratio"]) < 0.012:
+        return "Small or distant people"
+    if bool(row["border_touch"]):
+        return "Partial person at edge"
+    return "Standard indoor view"
+
+
 def failure_cause(row: dict[str, object]) -> str:
     if float(row["mean_brightness"]) < 65.0:
         return "Lighting / low light"
@@ -227,6 +245,75 @@ def summarize_mode(
         "mean_fps": round(1000.0 / mean_ms, 3),
         "speed_measurement": "CPU, one warm-up inference excluded",
     }
+
+
+def summarize_conditions(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    results: list[dict[str, object]] = []
+    for condition in sorted({str(row["condition"]) for row in rows}):
+        selected = [row for row in rows if row["condition"] == condition]
+        tp = sum(int(row["true_positives"]) for row in selected)
+        fp = sum(int(row["false_positives"]) for row in selected)
+        fn = sum(int(row["false_negatives"]) for row in selected)
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        results.append({
+            "condition": condition,
+            "images": len(selected),
+            "ground_truth_people": sum(int(row["ground_truth"]) for row in selected),
+            "true_positives": tp,
+            "false_positives": fp,
+            "false_negatives": fn,
+            "precision": round(precision, 6),
+            "recall": round(recall, 6),
+            "f1": round(f1, 6),
+            "count_mae": round(
+                float(np.mean([float(row["absolute_count_error"]) for row in selected])),
+                6,
+            ),
+            "mean_inference_ms": round(
+                float(np.mean([float(row["inference_ms"]) for row in selected])),
+                3,
+            ),
+        })
+    return results
+
+
+def write_detection_confusion_matrix(
+    output: Path,
+    true_positives: int,
+    false_positives: int,
+    false_negatives: int,
+) -> None:
+    """Write a detection-oriented TP/FP/FN matrix; true negatives are undefined."""
+    canvas = np.full((520, 760, 3), 255, dtype=np.uint8)
+    cv2.putText(
+        canvas,
+        "Detection outcome matrix (IoU >= 0.50)",
+        (50, 55),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.85,
+        (20, 20, 20),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(canvas, "Predicted person", (245, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (30, 30, 30), 2)
+    cv2.putText(canvas, "No matched prediction", (500, 112), cv2.FONT_HERSHEY_SIMPLEX, 0.57, (30, 30, 30), 2)
+    cv2.putText(canvas, "Actual person", (35, 225), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (30, 30, 30), 2)
+    cv2.putText(canvas, "No matched actual", (25, 385), cv2.FONT_HERSHEY_SIMPLEX, 0.57, (30, 30, 30), 2)
+
+    cells = [
+        ((220, 145, 440, 295), (220, 247, 230), "TP", true_positives),
+        ((470, 145, 700, 295), (225, 232, 252), "FN", false_negatives),
+        ((220, 320, 440, 470), (255, 235, 220), "FP", false_positives),
+        ((470, 320, 700, 470), (240, 240, 240), "TN", "N/A"),
+    ]
+    for (x1, y1, x2, y2), color, label, value in cells:
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), color, -1)
+        cv2.rectangle(canvas, (x1, y1), (x2, y2), (150, 150, 150), 2)
+        cv2.putText(canvas, label, (x1 + 22, y1 + 45), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (40, 40, 40), 2)
+        cv2.putText(canvas, str(value), (x1 + 70, y1 + 105), cv2.FONT_HERSHEY_SIMPLEX, 1.25, (20, 20, 20), 3)
+    cv2.imwrite(str(output), canvas)
 
 
 def format_console_table(
@@ -376,6 +463,14 @@ def write_improvement_plan(output: Path, failure_counts: Counter[str]) -> None:
 
 def main() -> None:
     args = parse_args()
+    random.seed(42)
+    np.random.seed(42)
+    cv2.setNumThreads(1)
+    args.model = args.model.resolve()
+    if not args.model.is_file():
+        raise FileNotFoundError(args.model)
+    model_sha256 = hashlib.sha256(args.model.read_bytes()).hexdigest()
+    model_size_mb = args.model.stat().st_size / (1024 * 1024)
     image_paths = sorted(
         path for path in args.images.iterdir() if path.suffix.lower() in {".jpg", ".jpeg", ".png"}
     )
@@ -435,6 +530,7 @@ def main() -> None:
                 "inference_ms": round(inference_ms, 3),
                 **features,
             }
+            row["condition"] = condition_label(row)
             mode_rows.append(row)
             predictions.extend((index, detection) for detection in detections)
             if use_tiles:
@@ -456,12 +552,44 @@ def main() -> None:
         writer = csv.DictWriter(handle, fieldnames=list(all_rows[0]))
         writer.writeheader()
         writer.writerows(all_rows)
-    (args.output / "summary.json").write_text(
-        json.dumps({"dataset": "locked source-grouped test", "methods": summaries}, indent=2) + "\n",
+    core_rows = [row for row in all_rows if row["method"] == "core_multiscale"]
+    condition_metrics = summarize_conditions(core_rows)
+    try:
+        reported_model_path = args.model.relative_to(ROOT)
+    except ValueError:
+        reported_model_path = args.model
+    evaluation_payload = {
+        "dataset": "locked source-grouped test",
+        "split": args.split,
+        "random_seed": 42,
+        "model": {
+            "path": str(reported_model_path),
+            "sha256": model_sha256,
+            "size_mb": round(model_size_mb, 3),
+        },
+        "methods": summaries,
+        "condition_breakdown": condition_metrics,
+    }
+    for name in ("summary.json", "metrics.json"):
+        (args.output / name).write_text(
+            json.dumps(evaluation_payload, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    with (args.output / "condition_metrics.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(condition_metrics[0]))
+        writer.writeheader()
+        writer.writerows(condition_metrics)
+    (args.output / "condition_metrics.json").write_text(
+        json.dumps(condition_metrics, indent=2) + "\n",
         encoding="utf-8",
     )
-
-    core_rows = [row for row in all_rows if row["method"] == "core_multiscale"]
+    core_summary = next(item for item in summaries if item["method"] == "core_multiscale")
+    write_detection_confusion_matrix(
+        args.output / "confusion_matrix.png",
+        int(core_summary["true_positives"]),
+        int(core_summary["false_positives"]),
+        int(core_summary["false_negatives"]),
+    )
     all_failures = sorted(
         (row for row in core_rows if int(row["false_positives"]) + int(row["false_negatives"]) > 0),
         key=lambda row: (
@@ -495,6 +623,8 @@ def main() -> None:
 
     failure_dir = args.output / "failures"
     failure_dir.mkdir(parents=True, exist_ok=True)
+    for stale_image in failure_dir.glob("failure_*.jpg"):
+        stale_image.unlink()
     index_by_name = {path.name: index for index, path in enumerate(image_paths)}
     for position, row in enumerate(gallery_rows, start=1):
         index = index_by_name[str(row["image"])]
@@ -521,6 +651,17 @@ def main() -> None:
     write_markdown_report(args.output, summaries, failure_counts, len(categorized_failures))
     write_improvement_plan(args.output, failure_counts)
     print_results_tables(summaries, failure_counts, len(categorized_failures), args.output)
+    print("\nCore-method condition breakdown")
+    print(format_console_table(
+        ["Condition", "Images", "GT", "P", "R", "F1", "Count MAE", "ms/image"],
+        [[
+            item["condition"], item["images"], item["ground_truth_people"],
+            f"{float(item['precision']):.4f}", f"{float(item['recall']):.4f}",
+            f"{float(item['f1']):.4f}", f"{float(item['count_mae']):.4f}",
+            f"{float(item['mean_inference_ms']):.2f}",
+        ] for item in condition_metrics],
+        right_align={1, 2, 3, 4, 5, 6, 7},
+    ))
 
 
 if __name__ == "__main__":

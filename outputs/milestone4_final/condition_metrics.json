@@ -1,0 +1,67 @@
+[
+  {
+    "condition": "Dense crowd / occlusion",
+    "images": 36,
+    "ground_truth_people": 615,
+    "true_positives": 83,
+    "false_positives": 63,
+    "false_negatives": 532,
+    "precision": 0.568493,
+    "recall": 0.134959,
+    "f1": 0.218134,
+    "count_mae": 13.027778,
+    "mean_inference_ms": 2279.156
+  },
+  {
+    "condition": "Low light",
+    "images": 13,
+    "ground_truth_people": 85,
+    "true_positives": 7,
+    "false_positives": 10,
+    "false_negatives": 78,
+    "precision": 0.411765,
+    "recall": 0.082353,
+    "f1": 0.137255,
+    "count_mae": 5.230769,
+    "mean_inference_ms": 2262.534
+  },
+  {
+    "condition": "Partial person at edge",
+    "images": 11,
+    "ground_truth_people": 41,
+    "true_positives": 10,
+    "false_positives": 2,
+    "false_negatives": 31,
+    "precision": 0.833333,
+    "recall": 0.243902,
+    "f1": 0.377358,
+    "count_mae": 2.636364,
+    "mean_inference_ms": 2273.377
+  },
+  {
+    "condition": "Small or distant people",
+    "images": 56,
+    "ground_truth_people": 288,
+    "true_positives": 51,
+    "false_positives": 53,
+    "false_negatives": 237,
+    "precision": 0.490385,
+    "recall": 0.177083,
+    "f1": 0.260204,
+    "count_mae": 3.428571,
+    "mean_inference_ms": 2275.155
+  },
+  {
+    "condition": "Standard indoor view",
+    "images": 17,
+    "ground_truth_people": 27,
+    "true_positives": 4,
+    "false_positives": 9,
+    "false_negatives": 23,
+    "precision": 0.307692,
+    "recall": 0.148148,
+    "f1": 0.2,
+    "count_mae": 1.058824,
+    "mean_inference_ms": 2266.085
+  }
+]

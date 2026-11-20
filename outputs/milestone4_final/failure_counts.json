@@ -1,0 +1,8 @@
+{
+  "Occlusion and clutter": 36,
+  "Lighting / low light": 13,
+  "Viewpoint and scale / small people": 55,
+  "Viewpoint / partial person at frame edge": 11,
+  "Look-alike background false positive": 3,
+  "Missed detection / low confidence": 15
+}
