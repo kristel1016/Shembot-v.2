@@ -17,7 +17,7 @@ const POSE_MODEL_PATH = new URL(
   import.meta.url,
 ).href;
 const MAX_INFERENCE_DIMENSION = 512;
-const TRACK_HOLD_MS = 2200;
+const TRACK_HOLD_MS = 6000;
 const RECALIBRATE_AFTER_MS = 4000;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const ZOOMED_SCORE_FLOOR = 0.25;
@@ -986,6 +986,16 @@ function boxesAreDuplicate(first, second) {
     return true;
   }
 
+  // A close person often produces one full-body box and another head/torso
+  // box. Treat a nearly contained box as the same person even when their
+  // areas differ substantially.
+  if (
+    containment >= 0.88 &&
+    (centerIsInside(first, second) || centerIsInside(second, first))
+  ) {
+    return true;
+  }
+
   if (areaRatio > 5) return false;
 
   const firstCenter = boxCenter(first);
@@ -1049,10 +1059,17 @@ function matchVerifiedPeople(people, poses, frame) {
   // tracks for one person or one person-like object.
   const availableDetections = new Set(people.map((_, index) => index));
   const verified = [];
+  const uniquePoses = [];
 
   for (const pose of [...poses].sort((first, second) => second.score - first.score)) {
+    if (!uniquePoses.some((kept) => boxesAreDuplicate(kept.bbox, pose.bbox))) {
+      uniquePoses.push(pose);
+    }
+  }
+
+  for (const pose of uniquePoses) {
     let bestIndex = -1;
-    let bestQuality = 1.15;
+    let bestQuality = 0.8;
     for (const index of availableDetections) {
       const quality = poseMatchQuality(people[index], pose);
       if (quality > bestQuality) {
@@ -1170,7 +1187,7 @@ function updateTracks(detections, now) {
   for (const track of state.tracks) {
     if (unmatchedTracks.has(track.id)) track.missedCycles += 1;
     const age = now - track.lastSeen;
-    if (age <= TRACK_HOLD_MS && track.missedCycles === 0) {
+    if (age <= TRACK_HOLD_MS && track.missedCycles <= 1) {
       activeTracks.push(track);
     }
     else state.flowTracks.delete(track.id);
@@ -1866,8 +1883,8 @@ async function createPoseLandmarker(vision, delegate) {
     },
     runningMode: "IMAGE",
     numPoses: 15,
-    minPoseDetectionConfidence: 0.45,
-    minPosePresenceConfidence: 0.45,
+    minPoseDetectionConfidence: 0.35,
+    minPosePresenceConfidence: 0.35,
     outputSegmentationMasks: false,
   });
 }
