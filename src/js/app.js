@@ -27,6 +27,8 @@ const ORIENTATION_SAMPLES = 2;
 const QUALITY_CHECK_INTERVAL_MS = 1200;
 const HISTORY_LIMIT = 1200;
 const MIN_POSE_LANDMARK_CONFIDENCE = 0.4;
+const MIN_CAMERA_DIMENSION = 16;
+const MAX_DETECTION_RETRY_DELAY_MS = 1200;
 
 const elements = {
   camera: document.querySelector("#camera"),
@@ -144,6 +146,8 @@ const state = {
   poseLandmarker: null,
   stream: null,
   running: false,
+  consecutiveDetectionErrors: 0,
+  detectionRecovering: false,
   facingMode: "environment",
   mirrored: false,
   loopToken: 0,
@@ -218,7 +222,9 @@ function median(values) {
 }
 
 function average(values) {
-  return values.reduce((total, value) => total + value, 0) / values.length;
+  return values.length
+    ? values.reduce((total, value) => total + value, 0) / values.length
+    : 0;
 }
 
 function updateCapacity(count) {
@@ -459,16 +465,39 @@ function syncCameraMirroring() {
 function getCrop(areaOverride) {
   const sourceWidth = elements.camera.videoWidth;
   const sourceHeight = elements.camera.videoHeight;
+  if (
+    !Number.isFinite(sourceWidth) ||
+    !Number.isFinite(sourceHeight) ||
+    sourceWidth < MIN_CAMERA_DIMENSION ||
+    sourceHeight < MIN_CAMERA_DIMENSION
+  ) {
+    return null;
+  }
+
   const area = areaOverride || state.area || { x: 0, y: 0, width: 1, height: 1 };
-  const x = Math.round(area.x * sourceWidth);
-  const y = Math.round(area.y * sourceHeight);
-  const width = Math.max(2, Math.round(area.width * sourceWidth));
-  const height = Math.max(2, Math.round(area.height * sourceHeight));
+  const normalizedX = clamp(Number(area.x) || 0, 0, 1);
+  const normalizedY = clamp(Number(area.y) || 0, 0, 1);
+  const normalizedWidth = clamp(Number(area.width) || 1, 0.01, 1);
+  const normalizedHeight = clamp(Number(area.height) || 1, 0.01, 1);
+  const x = clamp(Math.round(normalizedX * sourceWidth), 0, sourceWidth - 2);
+  const y = clamp(Math.round(normalizedY * sourceHeight), 0, sourceHeight - 2);
+  const availableWidth = sourceWidth - x;
+  const availableHeight = sourceHeight - y;
+  const width = clamp(
+    Math.round(normalizedWidth * sourceWidth),
+    2,
+    availableWidth,
+  );
+  const height = clamp(
+    Math.round(normalizedHeight * sourceHeight),
+    2,
+    availableHeight,
+  );
   return {
-    x: clamp(x, 0, sourceWidth - 1),
-    y: clamp(y, 0, sourceHeight - 1),
-    width: Math.min(width, sourceWidth - x),
-    height: Math.min(height, sourceHeight - y),
+    x,
+    y,
+    width,
+    height,
   };
 }
 
@@ -495,15 +524,17 @@ function prepareInferenceFrame(rotation, areaOverride) {
   const sourceWidth = elements.camera.videoWidth;
   const sourceHeight = elements.camera.videoHeight;
   const crop = getCrop(areaOverride);
+  if (!crop) return null;
   const turnsSideways = rotation === 90 || rotation === 270;
   const rotatedWidth = turnsSideways ? crop.height : crop.width;
   const rotatedHeight = turnsSideways ? crop.width : crop.height;
+  if (rotatedWidth < 2 || rotatedHeight < 2) return null;
   const scale = Math.min(
     1,
     MAX_INFERENCE_DIMENSION / Math.max(rotatedWidth, rotatedHeight),
   );
-  const width = Math.max(1, Math.round(rotatedWidth * scale));
-  const height = Math.max(1, Math.round(rotatedHeight * scale));
+  const width = Math.max(2, Math.round(rotatedWidth * scale));
+  const height = Math.max(2, Math.round(rotatedHeight * scale));
 
   if (inferenceCanvas.width !== width) inferenceCanvas.width = width;
   if (inferenceCanvas.height !== height) inferenceCanvas.height = height;
@@ -1369,8 +1400,10 @@ function drawDetections(tracks) {
   drawFlowLine(context);
 }
 
-function scheduleDetection(token) {
-  requestAnimationFrame(() => detectLoop(token));
+function scheduleDetection(token, delayMs = 0) {
+  const requestNextFrame = () => requestAnimationFrame(() => detectLoop(token));
+  if (delayMs > 0) window.setTimeout(requestNextFrame, delayMs);
+  else requestNextFrame();
 }
 
 function detectLoop(token) {
@@ -1378,6 +1411,8 @@ function detectLoop(token) {
 
   if (
     elements.camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
+    elements.camera.videoWidth < MIN_CAMERA_DIMENSION ||
+    elements.camera.videoHeight < MIN_CAMERA_DIMENSION ||
     elements.camera.currentTime === state.lastVideoTime
   ) {
     scheduleDetection(token);
@@ -1397,11 +1432,21 @@ function detectLoop(token) {
       ? state.area
       : scanAreas[state.scanIndex % scanAreas.length];
     const frame = prepareInferenceFrame(rotation, scanArea);
+    if (!frame) {
+      scheduleDetection(token);
+      return;
+    }
     if (state.calibration || scanArea?.kind === "full") {
       analyzeFrameQuality(startedAt);
     }
     const result = state.detector.detectForVideo(inferenceCanvas, startedAt);
     if (!state.running || token !== state.loopToken) return;
+    state.consecutiveDetectionErrors = 0;
+    if (state.detectionRecovering) {
+      state.detectionRecovering = false;
+      clearError();
+      updateAppStatus("Camera live", "live");
+    }
 
     if (state.calibration) {
       handleCalibrationResult(result, frame);
@@ -1495,10 +1540,20 @@ function detectLoop(token) {
     }
   } catch (error) {
     console.error(error);
-    showError(
-      `Detection paused: ${error?.message || "unexpected browser vision error"}. ` +
-      "Stop the camera, then start it again.",
+    state.consecutiveDetectionErrors += 1;
+    state.detectionRecovering = true;
+    state.scanIndex = 0;
+    state.scanDetections = [];
+    const retryDelay = Math.min(
+      MAX_DETECTION_RETRY_DELAY_MS,
+      120 * state.consecutiveDetectionErrors,
     );
+    showError(
+      `A camera frame was skipped: ${error?.message || "unexpected browser vision error"}. ` +
+      "Detection is retrying automatically.",
+    );
+    updateAppStatus("Recovering", "loading");
+    scheduleDetection(token, retryDelay);
     return;
   }
 
@@ -1538,6 +1593,8 @@ async function startCamera() {
     state.running = true;
     state.loopToken += 1;
     state.fpsHistory = [];
+    state.consecutiveDetectionErrors = 0;
+    state.detectionRecovering = false;
     state.lastVideoTime = -1;
     state.lastCalibrationAt = performance.now();
     resetTracking();
@@ -1579,6 +1636,8 @@ function stopAreaSelection() {
 
 function stopCamera() {
   state.running = false;
+  state.consecutiveDetectionErrors = 0;
+  state.detectionRecovering = false;
   state.loopToken += 1;
   state.stream?.getTracks().forEach((track) => track.stop());
   state.stream = null;

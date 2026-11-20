@@ -51,6 +51,9 @@ assert.match(app, /function consolidateDetections/);
 assert.match(app, /function matchVerifiedPeople/);
 assert.match(app, /counting is disabled/);
 assert.doesNotMatch(app, /using detector-only fallback/);
+assert.match(app, /videoWidth\s*<\s*MIN_CAMERA_DIMENSION/);
+assert.match(app, /Detection is retrying automatically/);
+assert.doesNotMatch(app, /Detection paused:/);
 assert.match(app, /navigator\.mediaDevices\.getUserMedia/);
 
 console.log(`SHEMBOT checkpoint smoke test passed (${requiredFiles.length} assets).`);
