@@ -5,7 +5,7 @@
 Shembot is a private, on-device crowd counter with live person detection and
 entry/exit analytics.
 
-**Live site:** <https://macatangay-shaine.github.io/Shembot-v.2/>
+**Live site:** <https://kristel1016.github.io/Shembot-v.2/>
 
 SHEMBOT is a mobile-first, browser-based people counter. It opens a phone or
 laptop camera, runs person detection locally, draws boxes, stabilizes the
@@ -45,13 +45,13 @@ python src/run.py --webcam 0 --output outputs/webcam.mp4
 python src/evaluate.py --output outputs/milestone3
 ```
 
-Locked source-grouped test results at confidence `0.20`, NMS `0.45`, and
+Locked source-grouped test results at validation-selected confidence `0.10`, NMS `0.50`, and
 matching IoU `0.50`:
 
 | Method | Precision | Recall | F1 | AP50 | mAP50–95 | Count MAE | FPS |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Single-scale baseline | 0.7600 | 0.0360 | 0.0687 | 0.0353 | 0.0184 | 7.5789 | 7.08 |
-| Integrated multi-scale core | 0.6731 | 0.0994 | 0.1733 | 0.0849 | 0.0357 | 6.7970 | 1.35 |
+| Single-scale baseline | 0.5984 | 0.0720 | 0.1285 | 0.0619 | 0.0283 | 7.0000 | 6.20 |
+| Integrated multi-scale core | 0.5308 | 0.1468 | 0.2300 | 0.1166 | 0.0473 | 5.8346 | 1.22 |
 
 These are intentionally reported as honest checkpoint results. Multi-scale
 inference improves recall, F1, AP, and count error, but it remains too slow for
@@ -81,7 +81,7 @@ python evaluation/evaluate_baseline.py
 
 Open the deployed HTTPS prototype—no local server is required:
 
-**<https://macatangay-shaine.github.io/Shembot-v.2/>**
+**<https://kristel1016.github.io/Shembot-v.2/>**
 
 Allow camera access and press **Start camera**. Use a current Chrome, Edge, or
 Safari browser. No npm install or build step is required; `npm test` is an

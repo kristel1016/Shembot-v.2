@@ -17,7 +17,7 @@ const POSE_MODEL_PATH = new URL(
   import.meta.url,
 ).href;
 const MAX_INFERENCE_DIMENSION = 512;
-const TRACK_HOLD_MS = 3400;
+const TRACK_HOLD_MS = 2200;
 const RECALIBRATE_AFTER_MS = 4000;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const ZOOMED_SCORE_FLOOR = 0.25;
@@ -26,6 +26,7 @@ const POSE_CACHE_MS = 1100;
 const ORIENTATION_SAMPLES = 2;
 const QUALITY_CHECK_INTERVAL_MS = 1200;
 const HISTORY_LIMIT = 1200;
+const MIN_POSE_LANDMARK_CONFIDENCE = 0.4;
 
 const elements = {
   camera: document.querySelector("#camera"),
@@ -713,8 +714,8 @@ function poseResultToDetections(result, frame, scanArea) {
       .filter(({ landmark }) =>
         Number.isFinite(landmark.x) &&
         Number.isFinite(landmark.y) &&
-        (landmark.visibility ?? 1) >= 0.25 &&
-        (landmark.presence ?? 1) >= 0.25
+        (landmark.visibility ?? 1) >= MIN_POSE_LANDMARK_CONFIDENCE &&
+        (landmark.presence ?? 1) >= MIN_POSE_LANDMARK_CONFIDENCE
       );
     const visibleByIndex = new Map(
       visible.map(({ landmark, index }) => [index, landmark]),
@@ -726,9 +727,19 @@ function poseResultToDetections(result, frame, scanArea) {
       .filter((index) => visibleByIndex.has(index)).length;
     const visibleArmPoints = [13, 14, 15, 16]
       .filter((index) => visibleByIndex.has(index)).length;
+    const visibleLegPoints = [25, 26, 27, 28, 29, 30, 31, 32]
+      .filter((index) => visibleByIndex.has(index)).length;
+    const anatomicalRegions = [
+      visibleHeadPoints >= 1,
+      shoulders.length >= 1,
+      hips.length >= 1,
+      visibleArmPoints >= 2,
+      visibleLegPoints >= 2,
+    ].filter(Boolean).length;
     if (
-      visible.length < 5 ||
+      visible.length < 7 ||
       shoulders.length === 0 ||
+      anatomicalRegions < 3 ||
       (hips.length === 0 && visibleHeadPoints === 0 && visibleArmPoints < 2)
     ) {
       return [];
@@ -761,11 +772,11 @@ function poseResultToDetections(result, frame, scanArea) {
       )),
     );
     const strongStandalonePose =
-      visible.length >= 9 &&
+      visible.length >= 12 &&
       shoulders.length === 2 &&
-      hips.length >= 1 &&
-      (visibleHeadPoints >= 1 || visibleArmPoints >= 2) &&
-      landmarkConfidence >= 0.45;
+      hips.length === 2 &&
+      visibleHeadPoints >= 2 &&
+      landmarkConfidence >= 0.6;
 
     return [{
       bbox: [left, top, right - left, bottom - top],
@@ -960,9 +971,10 @@ function boxesAreDuplicate(first, second) {
   const secondArea = boxArea(second);
   const areaRatio = Math.max(firstArea, secondArea) /
     Math.max(1, Math.min(firstArea, secondArea));
+  const containment = intersectionOverSmaller(first, second);
   if (
     overlap >= 0.45 ||
-    (areaRatio <= 2.5 && intersectionOverSmaller(first, second) >= 0.65)
+    (areaRatio <= 2.5 && containment >= 0.65)
   ) {
     return true;
   }
@@ -982,6 +994,9 @@ function boxesAreDuplicate(first, second) {
       Math.hypot(second[2], second[3]),
     ),
   );
+  if (containment >= 0.85 && distance < smallerDiagonal * 0.45) {
+    return true;
+  }
   return distance < smallerDiagonal * 0.22;
 }
 
@@ -1085,8 +1100,9 @@ function updateTracks(detections, now) {
       bestTrack.score = detection.score;
       bestTrack.maxScore = Math.max(bestTrack.maxScore, detection.score);
       bestTrack.hits += 1;
+      if (detection.verifiedByPose) bestTrack.poseHits += 1;
       bestTrack.lastSeen = now;
-      if (detection.verifiedByPose) bestTrack.confirmed = true;
+      if (bestTrack.poseHits >= 2) bestTrack.confirmed = true;
       const requiredHits = bestTrack.maxScore >= 0.75 ? 3 : 4;
       if (bestTrack.hits >= requiredHits) bestTrack.confirmed = true;
       unmatchedTracks.delete(bestTrack.id);
@@ -1097,8 +1113,9 @@ function updateTracks(detections, now) {
         score: detection.score,
         maxScore: detection.score,
         hits: 1,
+        poseHits: detection.verifiedByPose ? 1 : 0,
         lastSeen: now,
-        confirmed: Boolean(detection.verifiedByPose),
+        confirmed: false,
       });
     }
   }
@@ -1360,6 +1377,7 @@ function detectLoop(token) {
               bestMatchQuality = quality;
             }
           }
+          if (bestMatchQuality < 0.55) matchingDetection = null;
           if (!matchingDetection && !pose.strongStandalonePose) return [];
           const source = matchingDetection || pose;
           return [{

@@ -27,8 +27,8 @@ source to one deterministic split. Therefore, a crop or rotation of one scene
 cannot leak across train, validation, and test. The test set is not used for
 threshold tuning.
 
-For Milestone 3, the locked test split was opened once after confidence and NMS
-settings were frozen from validation. All 133 test images and their labels are
+For Milestone 3, all post-processing settings were frozen using the complete
+145-image validation split before the locked test was evaluated. All 133 test images and their labels are
 committed under `data/test/` so `src/evaluate.py` can reproduce the report.
 The Roboflow Pascal VOC export represents the only class with numeric label
 `0`; evaluation maps both `0` and `person` to the person class.
@@ -49,4 +49,22 @@ portrait phone video, close partial bodies, motion, backlighting, or the real
 deployment background. The next dataset must include consented phone frames and
 hard negatives such as empty rooms, furniture, fans, vehicles, pets, posters,
 mannequins, clothing, roofs, and shadows.
+
+## Kaggle archive audit
+
+The supplied Kaggle folder was inspected before training:
+
+- `Human Detection Dataset.zip` has 559 positive and 362 negative
+  classification images, but no person bounding boxes. Only the negative
+  images are valid hard-negative candidates for object detection.
+- `Pedestrian Dataset.zip` contains videos with a single tracked target per
+  frame rather than exhaustive person labels, so it is excluded from detector
+  training to avoid teaching unlabelled people as background.
+- `Pedestrian Detection Data set.zip` contains 1,339 Pascal VOC images. A
+  combined fine-tuning experiment reduced locked-test AP50 from `0.2886` to
+  `0.1418`, indicating deployment-domain shift, so that weaker checkpoint was
+  not deployed.
+
+`training/prepare_combined_voc.py` records these decisions and can reproduce a
+combined experimental dataset while preserving the original locked test split.
 

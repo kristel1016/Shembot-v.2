@@ -170,17 +170,19 @@ class PersonPipeline:
     def __init__(
         self,
         model_path: Path,
-        confidence: float = 0.25,
-        nms_threshold: float = 0.45,
+        confidence: float = 0.10,
+        nms_threshold: float = 0.50,
+        containment_threshold: float = 0.95,
         use_tiles: bool = True,
         tile_fraction: float = 0.64,
-        min_area_ratio: float = 0.0005,
+        min_area_ratio: float = 0.001,
         max_area_ratio: float = 0.92,
         min_aspect: float = 0.12,
         max_aspect: float = 1.65,
     ) -> None:
         self.confidence = confidence
         self.nms_threshold = nms_threshold
+        self.containment_threshold = containment_threshold
         self.use_tiles = use_tiles
         self.tile_fraction = tile_fraction
         self.min_area_ratio = min_area_ratio
@@ -241,7 +243,11 @@ class PersonPipeline:
                         detection.source,
                     )
                 )
-        return fuse_detections(filtered, self.nms_threshold)
+        return fuse_detections(
+            filtered,
+            self.nms_threshold,
+            self.containment_threshold,
+        )
 
     def predict(self, image: np.ndarray) -> list[Detection]:
         return self.postprocess(image, self.infer(image))

@@ -32,8 +32,10 @@ def parse_args() -> argparse.Namespace:
         default=ROOT / "evaluation" / "models" / "object_detection_yolox_2022nov_int8.onnx",
     )
     parser.add_argument("--mode", choices=("core", "baseline"), default="core")
-    parser.add_argument("--confidence", type=float, default=0.20)
-    parser.add_argument("--nms", type=float, default=0.45)
+    parser.add_argument("--confidence", type=float, default=0.10)
+    parser.add_argument("--nms", type=float, default=0.50)
+    parser.add_argument("--containment", type=float, default=0.95)
+    parser.add_argument("--min-area-ratio", type=float, default=0.001)
     parser.add_argument("--frame-stride", type=int, default=2)
     parser.add_argument("--display", action="store_true", help="Show video/webcam window")
     args = parser.parse_args()
@@ -41,6 +43,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--confidence must be between 0 and 1")
     if not 0.0 <= args.nms <= 1.0:
         parser.error("--nms must be between 0 and 1")
+    if not 0.0 <= args.containment <= 1.0:
+        parser.error("--containment must be between 0 and 1")
+    if not 0.0 <= args.min_area_ratio <= 1.0:
+        parser.error("--min-area-ratio must be between 0 and 1")
     if args.frame_stride < 1:
         parser.error("--frame-stride must be at least 1")
     return args
@@ -51,7 +57,9 @@ def build_pipeline(args: argparse.Namespace) -> PersonPipeline:
         args.model,
         confidence=args.confidence,
         nms_threshold=args.nms,
+        containment_threshold=args.containment,
         use_tiles=args.mode == "core",
+        min_area_ratio=args.min_area_ratio,
     )
 
 

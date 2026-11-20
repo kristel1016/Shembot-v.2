@@ -32,13 +32,21 @@ def parse_args() -> argparse.Namespace:
         default=ROOT / "evaluation" / "models" / "object_detection_yolox_2022nov_int8.onnx",
     )
     parser.add_argument("--output", type=Path, default=ROOT / "outputs" / "milestone3")
-    parser.add_argument("--confidence", type=float, default=0.20)
-    parser.add_argument("--nms", type=float, default=0.45)
+    parser.add_argument("--confidence", type=float, default=0.10)
+    parser.add_argument("--nms", type=float, default=0.50)
+    parser.add_argument("--containment", type=float, default=0.95)
+    parser.add_argument("--min-area-ratio", type=float, default=0.001)
+    parser.add_argument("--max-aspect", type=float, default=1.65)
     parser.add_argument("--iou", type=float, default=0.50)
     parser.add_argument("--limit", type=int, default=0, help="Optional deterministic image limit")
     parser.add_argument("--failure-gallery-size", type=int, default=12)
     args = parser.parse_args()
-    for value, label in ((args.confidence, "confidence"), (args.nms, "nms"), (args.iou, "iou")):
+    for value, label in (
+        (args.confidence, "confidence"),
+        (args.nms, "nms"),
+        (args.containment, "containment"),
+        (args.iou, "iou"),
+    ):
         if not 0.0 <= value <= 1.0:
             parser.error(f"--{label} must be between 0 and 1")
     if args.limit < 0 or args.failure_gallery_size < 10:
@@ -180,6 +188,9 @@ def summarize_mode(
     ground_truth_by_image: list[list[tuple[int, int, int, int]]],
     confidence: float,
     nms: float,
+    containment: float,
+    min_area_ratio: float,
+    max_aspect: float,
     iou: float,
 ) -> dict[str, object]:
     tp = sum(int(row["true_positives"]) for row in rows)
@@ -199,6 +210,9 @@ def summarize_mode(
         "ground_truth_people": sum(int(row["ground_truth"]) for row in rows),
         "confidence_threshold": confidence,
         "nms_threshold": nms,
+        "containment_threshold": containment,
+        "min_area_ratio": min_area_ratio,
+        "max_aspect": max_aspect,
         "matching_iou_threshold": iou,
         "true_positives": tp,
         "false_positives": fp,
@@ -213,6 +227,88 @@ def summarize_mode(
         "mean_fps": round(1000.0 / mean_ms, 3),
         "speed_measurement": "CPU, one warm-up inference excluded",
     }
+
+
+def format_console_table(
+    headers: list[str],
+    rows: list[list[object]],
+    *,
+    right_align: set[int] | None = None,
+) -> str:
+    """Return a dependency-free ASCII table suitable for any terminal."""
+    right_align = right_align or set()
+    text_rows = [[str(value) for value in row] for row in rows]
+    widths = [
+        max([len(headers[index]), *(len(row[index]) for row in text_rows)])
+        for index in range(len(headers))
+    ]
+    separator = "+" + "+".join("-" * (width + 2) for width in widths) + "+"
+
+    def render_row(values: list[str]) -> str:
+        cells = []
+        for index, value in enumerate(values):
+            padded = value.rjust(widths[index]) if index in right_align else value.ljust(widths[index])
+            cells.append(f" {padded} ")
+        return "|" + "|".join(cells) + "|"
+
+    rendered = [separator, render_row(headers), separator]
+    rendered.extend(render_row(row) for row in text_rows)
+    rendered.append(separator)
+    return "\n".join(rendered)
+
+
+def print_results_tables(
+    summaries: list[dict[str, object]],
+    failure_counts: Counter[str],
+    failure_total: int,
+    output: Path,
+) -> None:
+    """Print the final evaluation and failure results as compact tables."""
+    metric_headers = [
+        "Method", "Images", "GT", "TP", "FP", "FN", "Precision", "Recall",
+        "F1", "AP50", "mAP50-95", "Count MAE", "ms/image", "FPS",
+    ]
+    metric_rows: list[list[object]] = []
+    for summary in summaries:
+        metric_rows.append([
+            str(summary["method"]),
+            int(summary["images"]),
+            int(summary["ground_truth_people"]),
+            int(summary["true_positives"]),
+            int(summary["false_positives"]),
+            int(summary["false_negatives"]),
+            f"{float(summary['precision']):.4f}",
+            f"{float(summary['recall']):.4f}",
+            f"{float(summary['f1']):.4f}",
+            f"{float(summary['ap50']):.4f}",
+            f"{float(summary['map50_95']):.4f}",
+            f"{float(summary['count_mae']):.4f}",
+            f"{float(summary['mean_inference_ms']):.2f}",
+            f"{float(summary['mean_fps']):.2f}",
+        ])
+
+    print("\nEvaluation summary")
+    print(
+        format_console_table(
+            metric_headers,
+            metric_rows,
+            right_align=set(range(1, len(metric_headers))),
+        )
+    )
+
+    failure_rows = [
+        [cause, count, f"{(count / failure_total * 100.0):.1f}%"]
+        for cause, count in failure_counts.most_common()
+    ]
+    print("\nCore-method failure causes")
+    print(
+        format_console_table(
+            ["Cause", "Images", "Share"],
+            failure_rows,
+            right_align={1, 2},
+        )
+    )
+    print(f"\nDetailed results written to: {output.resolve()}")
 
 
 def write_markdown_report(
@@ -312,7 +408,10 @@ def main() -> None:
             args.model,
             confidence=args.confidence,
             nms_threshold=args.nms,
+            containment_threshold=args.containment,
             use_tiles=use_tiles,
+            min_area_ratio=args.min_area_ratio,
+            max_aspect=args.max_aspect,
         )
         pipeline.predict(images[0])  # warm-up is deliberately excluded from speed.
         mode_rows: list[dict[str, object]] = []
@@ -347,7 +446,8 @@ def main() -> None:
         summaries.append(
             summarize_mode(
                 mode, mode_rows, predictions, ground_truth_by_image,
-                args.confidence, args.nms, args.iou,
+                args.confidence, args.nms, args.containment,
+                args.min_area_ratio, args.max_aspect, args.iou,
             )
         )
         all_rows.extend(mode_rows)
@@ -420,7 +520,7 @@ def main() -> None:
     )
     write_markdown_report(args.output, summaries, failure_counts, len(categorized_failures))
     write_improvement_plan(args.output, failure_counts)
-    print("\n" + json.dumps({"methods": summaries, "failure_counts": failure_counts}, indent=2))
+    print_results_tables(summaries, failure_counts, len(categorized_failures), args.output)
 
 
 if __name__ == "__main__":
