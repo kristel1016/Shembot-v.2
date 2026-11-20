@@ -27,6 +27,12 @@ source to one deterministic split. Therefore, a crop or rotation of one scene
 cannot leak across train, validation, and test. The test set is not used for
 threshold tuning.
 
+For Milestone 3, the locked test split was opened once after confidence and NMS
+settings were frozen from validation. All 133 test images and their labels are
+committed under `data/test/` so `src/evaluate.py` can reproduce the report.
+The Roboflow Pascal VOC export represents the only class with numeric label
+`0`; evaluation maps both `0` and `person` to the person class.
+
 ## Preprocessing
 
 - Roboflow export: EXIF auto-orientation and 640 × 640 stretch.

@@ -1,4 +1,4 @@
-# SHEMBOT v2 — Milestone 2 (50% checkpoint)
+# SHEMBOT v2 — person detection and counting
 
 ## About
 
@@ -12,12 +12,56 @@ laptop camera, runs person detection locally, draws boxes, stabilizes the
 count, and displays capacity and entry/exit information. Camera frames are not
 uploaded by the application.
 
-This repository is the actual 50% checkpoint implementation. The live website,
+This repository contains the working implementation. The live website,
 vendored MediaPipe runtime, detector model, pose model, checkpoint reports,
 dataset audit, training scripts, measured baselines, and smoke tests are all
 included.
 
-## Fresh-clone checkpoint run
+## Milestone 3 — core implementation and testing
+
+> **✓ One command takes raw input to visible annotated output.**
+
+The Python checkpoint pipeline exposes separate `preprocess`, `infer`,
+`postprocess`, and `render` stages. It accepts an image, image folder, video,
+or webcam. The default core method combines a 640×640 full-frame YOLOX person
+scan with four overlapping crops, geometry filtering, duplicate fusion, and
+temporal count stabilization for video.
+
+```powershell
+git clone --branch cp3-core https://github.com/kristel1016/Shembot-v.2.git
+cd Shembot-v.2
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+
+# Raw image folder to annotated images and predictions.csv
+python src/run.py --input data/test/images --output outputs/run
+
+# Video or webcam
+python src/run.py --input demo.mp4 --output outputs/demo_annotated.mp4
+python src/run.py --webcam 0 --output outputs/webcam.mp4
+
+# Reproduce the baseline/core table, speed, and failure analysis
+python src/evaluate.py --output outputs/milestone3
+```
+
+Locked source-grouped test results at confidence `0.20`, NMS `0.45`, and
+matching IoU `0.50`:
+
+| Method | Precision | Recall | F1 | AP50 | mAP50–95 | Count MAE | FPS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Single-scale baseline | 0.7600 | 0.0360 | 0.0687 | 0.0353 | 0.0184 | 7.5789 | 7.08 |
+| Integrated multi-scale core | 0.6731 | 0.0994 | 0.1733 | 0.0849 | 0.0357 | 6.7970 | 1.35 |
+
+These are intentionally reported as honest checkpoint results. Multi-scale
+inference improves recall, F1, AP, and count error, but it remains too slow for
+real-time CPU use and still misses many small or heavily occluded people.
+
+Milestone 3 evidence is mapped in `MILESTONE_3.md`; the full report is in
+`reports/MILESTONE_3_REPORT.md` and the generated metrics/failure gallery are
+under `outputs/milestone3_final/`.
+
+## Milestone 2 — fresh-clone checkpoint run
 
 > **✓ A fresh clone plus the README steps runs the prototype.**
 

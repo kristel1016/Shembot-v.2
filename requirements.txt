@@ -1,5 +1,6 @@
-# The browser prototype itself has no Python package dependency. These pinned
-# packages reproduce the included 30-image CPU validation baseline.
+# The browser prototype itself has no Python package dependency. These packages
+# reproduce the Python checkpoint pipeline, evaluation, and Word report.
 numpy==2.5.5
 opencv-python==4.14.0.94
+python-docx==1.2.0
 

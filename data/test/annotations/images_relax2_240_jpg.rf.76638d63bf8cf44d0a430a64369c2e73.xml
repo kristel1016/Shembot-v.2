@@ -1,0 +1,29 @@
+<annotation>
+	<folder></folder>
+	<filename>images_relax2_240_jpg.rf.76638d63bf8cf44d0a430a64369c2e73.jpg</filename>
+	<path>images_relax2_240_jpg.rf.76638d63bf8cf44d0a430a64369c2e73.jpg</path>
+	<source>
+		<database>roboflow.com</database>
+	</source>
+	<size>
+		<width>640</width>
+		<height>640</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>0</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<occluded>0</occluded>
+		<bndbox>
+			<xmin>26</xmin>
+			<xmax>138</xmax>
+			<ymin>111</ymin>
+			<ymax>337</ymax>
+		</bndbox>
+	</object>
+	<metadata>
+	</metadata>
+</annotation>
