@@ -798,7 +798,7 @@ function safelyDetectPoses(frame, scanArea) {
     return poseResultToDetections(result, frame, scanArea);
   } catch (error) {
     console.warn(
-      "Automatic pose verification was disabled; continuing with person detection.",
+      "Automatic pose verification stopped; counting is disabled.",
       error,
     );
     try {
@@ -807,6 +807,13 @@ function safelyDetectPoses(frame, scanArea) {
       // The failed task may already be closed.
     }
     state.poseLandmarker = null;
+    state.tracks = [];
+    state.lastConfirmedTracks = [];
+    state.countHistory = [];
+    updateCapacity(0);
+    showError(
+      "Person verification stopped. Open this page directly in current Chrome or Safari, then reload it.",
+    );
     return [];
   }
 }
@@ -1036,6 +1043,43 @@ function poseMatchQuality(detection, pose) {
   return overlap * 2 + containment + proximity * 0.5;
 }
 
+function matchVerifiedPeople(people, poses, frame) {
+  // Count only candidates supported by both models. One detector box may be
+  // used once, preventing several pose hypotheses from creating duplicate
+  // tracks for one person or one person-like object.
+  const availableDetections = new Set(people.map((_, index) => index));
+  const verified = [];
+
+  for (const pose of [...poses].sort((first, second) => second.score - first.score)) {
+    let bestIndex = -1;
+    let bestQuality = 1.15;
+    for (const index of availableDetections) {
+      const quality = poseMatchQuality(people[index], pose);
+      if (quality > bestQuality) {
+        bestIndex = index;
+        bestQuality = quality;
+      }
+    }
+    if (bestIndex < 0) continue;
+
+    const detection = people[bestIndex];
+    availableDetections.delete(bestIndex);
+    verified.push({
+      ...detection,
+      // Pose boxes surround only visible landmarks and can shrink to a body
+      // part. Keep the detector's full-person box after pose verification.
+      bbox: [...detection.bbox],
+      score: Math.min(detection.score, pose.score),
+      relativeScanArea: boxArea(detection.bbox) /
+        Math.max(1, frame.sourceWidth * frame.sourceHeight),
+      edgeCropped: false,
+      verifiedByPose: true,
+    });
+  }
+
+  return verified;
+}
+
 function consolidateDetections(detections) {
   // Keep smaller individual detections until after duplicate removal. A broad
   // full-frame box can cover several overlapping people, so discarding the
@@ -1101,6 +1145,7 @@ function updateTracks(detections, now) {
       bestTrack.maxScore = Math.max(bestTrack.maxScore, detection.score);
       bestTrack.hits += 1;
       if (detection.verifiedByPose) bestTrack.poseHits += 1;
+      bestTrack.missedCycles = 0;
       bestTrack.lastSeen = now;
       if (bestTrack.poseHits >= 2) bestTrack.confirmed = true;
       const requiredHits = bestTrack.maxScore >= 0.75 ? 3 : 4;
@@ -1114,6 +1159,7 @@ function updateTracks(detections, now) {
         maxScore: detection.score,
         hits: 1,
         poseHits: detection.verifiedByPose ? 1 : 0,
+        missedCycles: 0,
         lastSeen: now,
         confirmed: false,
       });
@@ -1122,8 +1168,11 @@ function updateTracks(detections, now) {
 
   const activeTracks = [];
   for (const track of state.tracks) {
+    if (unmatchedTracks.has(track.id)) track.missedCycles += 1;
     const age = now - track.lastSeen;
-    if (age <= TRACK_HOLD_MS) activeTracks.push(track);
+    if (age <= TRACK_HOLD_MS && track.missedCycles === 0) {
+      activeTracks.push(track);
+    }
     else state.flowTracks.delete(track.id);
   }
   state.tracks = activeTracks;
@@ -1365,36 +1414,9 @@ function detectLoop(token) {
       state.lastPoseVerificationAt = now;
       state.lastPoseDetections = poseDetections;
     }
-    const verifiedPeople = !poseWasAvailable || !state.poseLandmarker
-      ? people
-      : poseDetections.flatMap((pose) => {
-          let matchingDetection = null;
-          let bestMatchQuality = 0;
-          for (const detection of people) {
-            const quality = poseMatchQuality(detection, pose);
-            if (quality > bestMatchQuality) {
-              matchingDetection = detection;
-              bestMatchQuality = quality;
-            }
-          }
-          if (bestMatchQuality < 0.55) matchingDetection = null;
-          if (!matchingDetection && !pose.strongStandalonePose) return [];
-          const source = matchingDetection || pose;
-          return [{
-            ...source,
-            // A detector can return one broad box around several overlapping
-            // people. Emit every verified pose so each visible person remains
-            // an independent candidate instead of selecting only one pose. A
-            // strong multi-keypoint pose can also recover a person that the
-            // object detector missed completely.
-            bbox: [...pose.bbox],
-            score: matchingDetection ? matchingDetection.score : pose.score,
-            relativeScanArea: boxArea(pose.bbox) /
-              Math.max(1, frame.sourceWidth * frame.sourceHeight),
-            edgeCropped: false,
-            verifiedByPose: true,
-          }];
-        });
+    const verifiedPeople = poseWasAvailable && state.poseLandmarker
+      ? matchVerifiedPeople(people, poseDetections, frame)
+      : [];
     state.scanDetections.push(...verifiedPeople);
     const scanCycleComplete = state.scanIndex === 0;
     let confirmedTracks = consolidateDetections(
@@ -1405,9 +1427,11 @@ function detectLoop(token) {
       const fusedDetections = consolidateDetections(state.scanDetections);
       state.scanDetections = [];
       confirmedTracks = updateTracks(fusedDetections, startedAt);
-      state.countHistory.push(confirmedTracks.length);
-      if (state.countHistory.length > 3) state.countHistory.shift();
-      const displayedCount = median(state.countHistory);
+      // Track confirmation already supplies temporal persistence. Display the
+      // current confirmed count so people who leave are not kept by an older
+      // three-cycle median.
+      state.countHistory = [confirmedTracks.length];
+      const displayedCount = confirmedTracks.length;
       updateCapacity(displayedCount);
       recordCountHistory(displayedCount);
       updateFlowTracking(confirmedTracks, startedAt);
@@ -1842,8 +1866,8 @@ async function createPoseLandmarker(vision, delegate) {
     },
     runningMode: "IMAGE",
     numPoses: 15,
-    minPoseDetectionConfidence: 0.25,
-    minPosePresenceConfidence: 0.25,
+    minPoseDetectionConfidence: 0.45,
+    minPosePresenceConfidence: 0.45,
     outputSegmentationMasks: false,
   });
 }
@@ -1871,11 +1895,22 @@ async function loadModel() {
         state.poseLandmarker = await createPoseLandmarker(vision, "CPU");
       } catch (poseError) {
         console.warn(
-          "Pose verification unavailable; using detector-only fallback.",
+          "Pose verification unavailable; counting is disabled.",
           poseError,
         );
         state.poseLandmarker = null;
       }
+    }
+
+    if (!state.poseLandmarker) {
+      elements.modelLoading.hidden = true;
+      elements.startButton.disabled = true;
+      elements.modelStatus.textContent = "Person verifier unavailable";
+      updateAppStatus("Use Chrome or Safari", "error");
+      showError(
+        "Strict person verification is unavailable in this browser. Open the link directly in current Chrome or Safari and reload it.",
+      );
+      return;
     }
 
     elements.modelLoading.hidden = true;

@@ -48,6 +48,9 @@ assert.match(app, /ObjectDetector\.createFromOptions/);
 assert.match(app, /PoseLandmarker\.createFromOptions/);
 assert.match(app, /function prepareInferenceFrame/);
 assert.match(app, /function consolidateDetections/);
+assert.match(app, /function matchVerifiedPeople/);
+assert.match(app, /counting is disabled/);
+assert.doesNotMatch(app, /using detector-only fallback/);
 assert.match(app, /navigator\.mediaDevices\.getUserMedia/);
 
 console.log(`SHEMBOT checkpoint smoke test passed (${requiredFiles.length} assets).`);
