@@ -21,8 +21,9 @@ const POSE_MODEL_PATH = new URL(
   import.meta.url,
 ).href;
 const MAX_INFERENCE_DIMENSION = 512;
-const TRACK_HOLD_MS = 6000;
-const RECALIBRATE_AFTER_MS = 4000;
+const TRACK_HOLD_MS = 2200;
+const RECALIBRATE_AFTER_MS = 30000;
+const MAX_CONFIRMED_MISSED_CYCLES = 6;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const ZOOMED_SCORE_FLOOR = 0.25;
 const POSE_VERIFICATION_INTERVAL_MS = 420;
@@ -164,6 +165,7 @@ const state = {
   calibration: null,
   lastCalibrationAt: 0,
   scanIndex: 0,
+  tileIndex: 0,
   scanDetections: [],
   lastPoseVerificationAt: -Infinity,
   lastPoseDetections: [],
@@ -439,6 +441,7 @@ function resetTracking() {
   state.flowTracks.clear();
   state.countHistory = [];
   state.scanIndex = 0;
+  state.tileIndex = 0;
   state.scanDetections = [];
   state.lastPoseVerificationAt = -Infinity;
   state.lastPoseDetections = [];
@@ -523,7 +526,10 @@ function getScanAreas() {
     height: tileSize * base.height,
     kind: "tile",
   }));
-  return [{ ...base, kind: "full" }, ...tiles];
+  // Run the full frame every cycle, then rotate through one zoomed tile.
+  // This updates tracks after two inferences instead of waiting for all five.
+  const tile = tiles[state.tileIndex % tiles.length];
+  return [{ ...base, kind: "full" }, tile];
 }
 
 function prepareInferenceFrame(rotation, areaOverride) {
@@ -1226,7 +1232,7 @@ function updateTracks(detections, now) {
       if (detection.verifiedByPose) bestTrack.poseHits += 1;
       bestTrack.missedCycles = 0;
       bestTrack.lastSeen = now;
-      if (bestTrack.poseHits >= 2) bestTrack.confirmed = true;
+      if (detection.verifiedByPose) bestTrack.confirmed = true;
       const requiredHits = bestTrack.maxScore >= 0.75 ? 3 : 4;
       if (bestTrack.hits >= requiredHits) bestTrack.confirmed = true;
       unmatchedTracks.delete(bestTrack.id);
@@ -1240,7 +1246,7 @@ function updateTracks(detections, now) {
         poseHits: detection.verifiedByPose ? 1 : 0,
         missedCycles: 0,
         lastSeen: now,
-        confirmed: false,
+        confirmed: Boolean(detection.verifiedByPose),
       });
     }
   }
@@ -1249,7 +1255,10 @@ function updateTracks(detections, now) {
   for (const track of state.tracks) {
     if (unmatchedTracks.has(track.id)) track.missedCycles += 1;
     const age = now - track.lastSeen;
-    if (age <= TRACK_HOLD_MS && track.missedCycles <= 1) {
+    const missedCycleLimit = track.confirmed
+      ? MAX_CONFIRMED_MISSED_CYCLES
+      : 1;
+    if (age <= TRACK_HOLD_MS && track.missedCycles <= missedCycleLimit) {
       activeTracks.push(track);
     }
     else state.flowTracks.delete(track.id);
@@ -1562,6 +1571,7 @@ function detectLoop(token) {
     if (scanCycleComplete) {
       const fusedDetections = consolidateDetections(state.scanDetections);
       state.scanDetections = [];
+      state.tileIndex = (state.tileIndex + 1) % 4;
       confirmedTracks = updateTracks(fusedDetections, startedAt);
       // Track confirmation already supplies temporal persistence. Display the
       // current confirmed count so people who leave are not kept by an older

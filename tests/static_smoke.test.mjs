@@ -55,6 +55,9 @@ assert.doesNotMatch(app, /using detector-only fallback/);
 assert.match(app, /videoWidth\s*<\s*MIN_CAMERA_DIMENSION/);
 assert.match(app, /function recoverDetectorAfterRuntimeError/);
 assert.match(app, /Switching to compatible detection/);
+assert.match(app, /MAX_CONFIRMED_MISSED_CYCLES/);
+assert.match(app, /confirmed:\s*Boolean\(detection\.verifiedByPose\)/);
+assert.match(app, /return \[\{ \.\.\.base, kind: "full" \}, tile\]/);
 assert.doesNotMatch(app, /Detection paused:/);
 assert.match(app, /navigator\.mediaDevices\.getUserMedia/);
 
