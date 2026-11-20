@@ -14,6 +14,7 @@ const requiredFiles = [
   "src/js/app.js",
   "lib/mediapipe/vision_bundle.js",
   "lib/mediapipe/models/efficientdet_lite0.tflite",
+  "lib/mediapipe/models/efficientdet_lite0_generic.tflite",
   "lib/mediapipe/models/pose_landmarker_lite.task",
   "lib/mediapipe/wasm/vision_wasm_internal.js",
   "lib/mediapipe/wasm/vision_wasm_internal.wasm",
@@ -52,7 +53,8 @@ assert.match(app, /function matchVerifiedPeople/);
 assert.match(app, /counting is disabled/);
 assert.doesNotMatch(app, /using detector-only fallback/);
 assert.match(app, /videoWidth\s*<\s*MIN_CAMERA_DIMENSION/);
-assert.match(app, /Detection is retrying automatically/);
+assert.match(app, /function recoverDetectorAfterRuntimeError/);
+assert.match(app, /Switching to compatible detection/);
 assert.doesNotMatch(app, /Detection paused:/);
 assert.match(app, /navigator\.mediaDevices\.getUserMedia/);
 

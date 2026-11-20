@@ -12,6 +12,10 @@ const MODEL_PATH = new URL(
   "../../lib/mediapipe/models/efficientdet_lite0.tflite",
   import.meta.url,
 ).href;
+const FALLBACK_MODEL_PATH = new URL(
+  "../../lib/mediapipe/models/efficientdet_lite0_generic.tflite",
+  import.meta.url,
+).href;
 const POSE_MODEL_PATH = new URL(
   "../../lib/mediapipe/models/pose_landmarker_lite.task",
   import.meta.url,
@@ -28,7 +32,6 @@ const QUALITY_CHECK_INTERVAL_MS = 1200;
 const HISTORY_LIMIT = 1200;
 const MIN_POSE_LANDMARK_CONFIDENCE = 0.4;
 const MIN_CAMERA_DIMENSION = 16;
-const MAX_DETECTION_RETRY_DELAY_MS = 1200;
 
 const elements = {
   camera: document.querySelector("#camera"),
@@ -143,6 +146,9 @@ const lastSavedOccupancy = [...savedHistory]
 
 const state = {
   detector: null,
+  vision: null,
+  detectorModelName: "custom",
+  detectorRecoveryPromise: null,
   poseLandmarker: null,
   stream: null,
   running: false,
@@ -1406,6 +1412,49 @@ function scheduleDetection(token, delayMs = 0) {
   else requestNextFrame();
 }
 
+function recoverDetectorAfterRuntimeError(error, token) {
+  if (state.detectorRecoveryPromise) return state.detectorRecoveryPromise;
+
+  const failedModelName = state.detectorModelName;
+  state.detectorRecoveryPromise = (async () => {
+    if (!state.vision || failedModelName === "generic") throw error;
+
+    showError(
+      "The optimized detector is not supported by this browser. Switching to compatible detection...",
+    );
+    updateAppStatus("Switching detector", "loading");
+    try {
+      state.detector?.close();
+    } catch {
+      // The failed task may already be closed.
+    }
+    state.detector = await createDetector(
+      state.vision,
+      "CPU",
+      FALLBACK_MODEL_PATH,
+    );
+    state.detectorModelName = "generic";
+    state.consecutiveDetectionErrors = 0;
+    state.detectionRecovering = false;
+    state.lastVideoTime = -1;
+    resetTracking();
+    clearError();
+    updateAppStatus("Camera live (compatible mode)", "live");
+    if (state.running && token === state.loopToken) scheduleDetection(token);
+  })().catch((recoveryError) => {
+    console.error("Compatible detector recovery failed.", recoveryError);
+    stopCamera();
+    showError(
+      "Detection could not recover in this browser. Reload the page, then start the camera again.",
+    );
+    updateAppStatus("Detector error", "error");
+  }).finally(() => {
+    state.detectorRecoveryPromise = null;
+  });
+
+  return state.detectorRecoveryPromise;
+}
+
 function detectLoop(token) {
   if (!state.running || token !== state.loopToken) return;
 
@@ -1544,16 +1593,11 @@ function detectLoop(token) {
     state.detectionRecovering = true;
     state.scanIndex = 0;
     state.scanDetections = [];
-    const retryDelay = Math.min(
-      MAX_DETECTION_RETRY_DELAY_MS,
-      120 * state.consecutiveDetectionErrors,
-    );
     showError(
-      `A camera frame was skipped: ${error?.message || "unexpected browser vision error"}. ` +
-      "Detection is retrying automatically.",
+      `Detector error: ${error?.message || "unexpected browser vision error"}. ` +
+      "Switching to compatible detection...",
     );
-    updateAppStatus("Recovering", "loading");
-    scheduleDetection(token, retryDelay);
+    void recoverDetectorAfterRuntimeError(error, token);
     return;
   }
 
@@ -1946,10 +1990,10 @@ updateFlowUi();
 updateHistoryUi();
 loadModel();
 
-async function createDetector(vision, delegate) {
+async function createDetector(vision, delegate, modelAssetPath = MODEL_PATH) {
   return ObjectDetector.createFromOptions(vision, {
     baseOptions: {
-      modelAssetPath: MODEL_PATH,
+      modelAssetPath,
       delegate,
     },
     runningMode: "VIDEO",
@@ -1978,14 +2022,9 @@ async function loadModel() {
     updateAppStatus("Loading", "loading");
     elements.modelStatus.textContent = "Loading fast mobile person detector...";
     const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM);
-
-    try {
-      state.detector = await createDetector(vision, "GPU");
-    } catch (gpuError) {
-      console.warn("GPU detector unavailable; using CPU.", gpuError);
-      elements.modelStatus.textContent = "Loading compatible detector...";
-      state.detector = await createDetector(vision, "CPU");
-    }
+    state.vision = vision;
+    state.detector = await createDetector(vision, "CPU", MODEL_PATH);
+    state.detectorModelName = "custom";
 
     elements.modelStatus.textContent = "Loading automatic person verifier...";
     try {
