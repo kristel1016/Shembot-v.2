@@ -8,7 +8,7 @@ import {
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
   selectDistinctSplitPair,
-} from "./detection_geometry.js?v=20261124-ops1";
+} from "./detection_geometry.js?v=20261124-ops2";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -27,11 +27,13 @@ const POSE_MODEL_PATH = new URL(
   import.meta.url,
 ).href;
 const MAX_INFERENCE_DIMENSION = 768;
-const TRACK_HOLD_MS = 1500;
+const TRACK_HOLD_MS = 2400;
 const DISPLAY_TRACK_HOLD_MS = 850;
+const STABLE_DISPLAY_TRACK_HOLD_MS = 2200;
 const RECALIBRATE_AFTER_MS = 30000;
-const MAX_CONFIRMED_MISSED_CYCLES = 4;
+const MAX_CONFIRMED_MISSED_CYCLES = 14;
 const MAX_VISIBLE_MISSED_CYCLES = 1;
+const STABLE_MAX_VISIBLE_MISSED_CYCLES = 12;
 const POSE_ASSISTED_SCORE_FLOOR = 0.18;
 const DETECTOR_ONLY_SCORE_FLOOR = 0.50;
 const DETECTOR_ONLY_FAST_SCORE = 0.64;
@@ -2761,7 +2763,15 @@ function motionAwareTrackMatchScore(track, detection, now) {
   ];
   const ordinaryScore = boxMatchScore(track.bbox, detection.bbox);
   const predictedScore = boxMatchScore(predictedBox, detection.bbox);
-  const directScore = Math.max(ordinaryScore, predictedScore);
+  const sameRecentPose =
+    Number.isInteger(detection.poseId) &&
+    detection.poseId === track.lastPoseId &&
+    now - (track.lastPoseSeenAt || -Infinity) <= POSE_CACHE_MS + 250;
+  const directScore = Math.max(
+    ordinaryScore,
+    predictedScore,
+    sameRecentPose ? 0.92 : 0,
+  );
   if (directScore > 0) return directScore;
 
   const trackArea = boxArea(track.bbox);
@@ -2798,10 +2808,28 @@ function canReacquireMovingTrack(detection, now) {
 }
 
 function isTrackVisible(track, now) {
+  const speed = Math.hypot(track.velocityX || 0, track.velocityY || 0);
+  const sourceWidth = Math.max(1, elements.overlay.width);
+  const sourceHeight = Math.max(1, elements.overlay.height);
+  const centerX = (track.bbox[0] + track.bbox[2] / 2) / sourceWidth;
+  const centerY = (track.bbox[1] + track.bbox[3] / 2) / sourceHeight;
+  const nearFrameEdge =
+    centerX < 0.07 || centerX > 0.93 || centerY < 0.07 || centerY > 0.93;
+  const stableTrack = track.hits >= 4 && speed < 0.05 && !nearFrameEdge;
+  const holdMs = stableTrack
+    ? STABLE_DISPLAY_TRACK_HOLD_MS
+    : nearFrameEdge
+      ? 650
+      : DISPLAY_TRACK_HOLD_MS;
+  const missedCycleLimit = stableTrack
+    ? STABLE_MAX_VISIBLE_MISSED_CYCLES
+    : nearFrameEdge
+      ? 1
+      : MAX_VISIBLE_MISSED_CYCLES;
   return (
     track.confirmed &&
-    now - track.lastSeen <= DISPLAY_TRACK_HOLD_MS &&
-    track.missedCycles <= MAX_VISIBLE_MISSED_CYCLES
+    now - track.lastSeen <= holdMs &&
+    track.missedCycles <= missedCycleLimit
   );
 }
 
@@ -2842,7 +2870,13 @@ function updateTracks(detections, now) {
       bestTrack.score = detection.score;
       bestTrack.maxScore = Math.max(bestTrack.maxScore, detection.score);
       bestTrack.hits += 1;
-      if (detection.verifiedByPose) bestTrack.poseHits += 1;
+      if (detection.verifiedByPose) {
+        bestTrack.poseHits += 1;
+        if (Number.isInteger(detection.poseId)) {
+          bestTrack.lastPoseId = detection.poseId;
+          bestTrack.lastPoseSeenAt = now;
+        }
+      }
       bestTrack.missedCycles = 0;
       bestTrack.lastSeen = now;
       bestTrack.fromFullScan = detection.fromFullScan;
@@ -2867,6 +2901,10 @@ function updateTracks(detections, now) {
         lastSeen: now,
         velocityX: 0,
         velocityY: 0,
+        lastPoseId: Number.isInteger(detection.poseId)
+          ? detection.poseId
+          : null,
+        lastPoseSeenAt: detection.verifiedByPose ? now : -Infinity,
         confirmed: instantlyConfirmed,
       });
     }
@@ -3005,17 +3043,23 @@ function drawFlowLine(context) {
   context.setLineDash([]);
   context.font =
     "800 " + Math.max(13, elements.overlay.width / 45) + "px system-ui";
+  context.textBaseline = "middle";
+  context.textAlign = "left";
   const textWidth = context.measureText(direction).width;
   const labelHeight = Math.max(22, elements.overlay.width / 30);
   const labelWidth = textWidth + 14;
   const labelX = state.rightIsEntry
     ? clamp(x + 6, 8, elements.overlay.width - labelWidth - 8)
     : clamp(x - labelWidth - 6, 8, elements.overlay.width - labelWidth - 8);
-  const labelY = 10;
+  const labelY = clamp(
+    elements.overlay.height * 0.1,
+    24,
+    elements.overlay.height - labelHeight - 24,
+  );
   context.fillStyle = "#ffc857";
   context.fillRect(labelX, labelY, labelWidth, labelHeight);
   context.fillStyle = "#17191d";
-  context.fillText(direction, labelX + 7, labelY + 2);
+  context.fillText(direction, labelX + 7, labelY + labelHeight / 2);
   context.restore();
 }
 

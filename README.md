@@ -142,7 +142,7 @@ optional shortcut for the JavaScript smoke test.
 - optional PoseLandmarker assistance with detector-only temporal fallback
 - portrait/landscape orientation testing
 - full-frame plus overlapping zoom scans for small people
-- NMS, containment-aware duplicate suppression, motion-aware reacquisition, and sub-second stale-box hiding
+- NMS, containment-aware duplicate suppression, recent-pose identity matching, and adaptive track persistence for low-light stability
 - live raw/plausible/pose/candidate/tracked pipeline diagnostics
 - HD camera request and 768-pixel inference preparation
 - configurable room capacity and detection area
