@@ -1954,6 +1954,8 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .image-result-canvas.is-correcting {
   cursor: crosshair;
   touch-action: manipulation;
+  outline: 4px solid rgba(91, 127, 212, 0.92);
+  outline-offset: -4px;
 }
 
 .image-result-summary {

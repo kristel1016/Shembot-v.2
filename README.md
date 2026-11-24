@@ -146,10 +146,11 @@ optional shortcut for the JavaScript smoke test.
 - live raw/plausible/pose/candidate/tracked pipeline diagnostics
 - HD camera request and 768-pixel inference preparation
 - configurable room capacity and detection area
+- side-mounted vertical entry/exit line with left/right crossing direction
 - safe, near-capacity, and overcapacity status with an optional sound alert
 - live occupancy graph, session summary, and downloadable session CSV report
-- downloadable annotated camera recording with count, status, and local timestamp
-- uploaded-image crowd analysis with a generic COCO detector, adaptive dense-crowd zoom scans, one-to-one cross-scan deduplication, pair splitting, manual result correction, recommended action, and downloadable annotated output
+- phone-compatible MP4-first annotated camera recording with count, status, and local timestamp
+- uploaded-image crowd analysis with adaptive zoom scans, tap-to-correct boxes, practical operator actions, and downloadable annotated output
 - front/rear camera switching and mirrored preview correction
 - lighting and clarity guidance
 - entry/exit line counter and local CSV history

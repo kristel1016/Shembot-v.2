@@ -8,7 +8,7 @@ import {
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
   selectDistinctSplitPair,
-} from "./detection_geometry.js?v=20261124-crowd1";
+} from "./detection_geometry.js?v=20261124-ops1";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -283,12 +283,12 @@ const state = {
   quality: { code: "waiting", label: "Waiting for camera" },
   flowEnabled: localStorage.getItem("flowEnabled") === "true",
   flowLinePosition: clampStoredNumber(
-    localStorage.getItem("flowLinePosition"),
-    0.2,
-    0.8,
-    0.6,
+    localStorage.getItem("verticalFlowLinePosition"),
+    0.05,
+    0.95,
+    0.15,
   ),
-  downIsEntry: localStorage.getItem("downIsEntry") !== "false",
+  rightIsEntry: localStorage.getItem("rightIsEntry") !== "false",
   entered: Number(savedFlowCounts.entered) || 0,
   exited: Number(savedFlowCounts.exited) || 0,
   flowTracks: new Map(),
@@ -660,10 +660,12 @@ function updateFlowUi() {
   elements.flowLineInput.value = String(flowPercent);
   elements.flowLineInput.style.setProperty("--range-progress", `${progress}%`);
   elements.flowLineOutput.value = `${flowPercent}%`;
-  elements.flowDirectionButton.dataset.direction = state.downIsEntry ? "down" : "up";
-  elements.flowDirectionButton.textContent = state.downIsEntry
-    ? "Down = entry"
-    : "Up = entry";
+  elements.flowDirectionButton.dataset.direction = state.rightIsEntry
+    ? "right"
+    : "left";
+  elements.flowDirectionButton.textContent = state.rightIsEntry
+    ? "Right = entry"
+    : "Left = entry";
   elements.enteredValue.textContent = String(state.entered);
   elements.exitedValue.textContent = String(state.exited);
 }
@@ -712,7 +714,9 @@ function downloadBlob(blob, filename) {
   document.body.append(link);
   link.click();
   link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  // Mobile browsers may continue reading the object URL after the synthetic
+  // click returns. Revoking it immediately can truncate or corrupt the file.
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function formatRecordingTimestamp(timestamp) {
@@ -732,11 +736,12 @@ function recordingFileTimestamp(timestamp) {
 
 function getRecordingFormat() {
   const formats = [
-    { mimeType: "video/webm;codecs=vp9", extension: "webm" },
-    { mimeType: "video/webm;codecs=vp8", extension: "webm" },
-    { mimeType: "video/webm", extension: "webm" },
     { mimeType: "video/mp4;codecs=avc1.42E01E", extension: "mp4" },
+    { mimeType: "video/mp4;codecs=h264", extension: "mp4" },
     { mimeType: "video/mp4", extension: "mp4" },
+    { mimeType: "video/webm;codecs=vp8", extension: "webm" },
+    { mimeType: "video/webm;codecs=vp9", extension: "webm" },
+    { mimeType: "video/webm", extension: "webm" },
   ];
   return formats.find((format) => MediaRecorder.isTypeSupported(format.mimeType)) || null;
 }
@@ -845,8 +850,10 @@ function finalizeRecording(recording) {
   recording.finalized = true;
   cancelAnimationFrame(recording.animationFrame);
   recording.canvasStream.getTracks().forEach((track) => track.stop());
-  const mimeType = recording.recorder.mimeType || recording.format?.mimeType || "video/webm";
-  const extension = mimeType.includes("mp4") ? "mp4" : "webm";
+  const mimeType = recording.recorder.mimeType ||
+    recording.format?.mimeType || "video/webm";
+  const extension = recording.format?.extension ||
+    (mimeType.includes("mp4") ? "mp4" : "webm");
   const blob = new Blob(recording.chunks, { type: mimeType });
   if (blob.size > 0) {
     downloadBlob(
@@ -912,7 +919,11 @@ function startRecording() {
   });
   recorder.addEventListener("stop", () => finalizeRecording(recording), { once: true });
   try {
-    recorder.start(1000);
+    // Safari/iOS produces a properly indexed MP4 when it receives one final
+    // data chunk at stop. Timesliced MP4 chunks are not reliably playable in
+    // the Photos app, while WebM benefits from periodic chunks.
+    if (format?.extension === "mp4") recorder.start();
+    else recorder.start(1000);
   } catch (error) {
     state.recording = null;
     canvasStream.getTracks().forEach((track) => track.stop());
@@ -1400,26 +1411,29 @@ function renderAnalyzedImage(detections, processingMs) {
   elements.imageProcessingTime.textContent = `${Math.round(processingMs)} ms`;
   elements.imageResultGuidance.dataset.status = status;
   if (detections.length === 0) {
-    elements.imageRecommendationTitle.textContent = "Review the image before deciding";
+    elements.imageRecommendationTitle.textContent =
+      "Verify the room in person before reporting zero occupancy";
     elements.imageRecommendationMessage.textContent =
-      "No people passed the threshold. Try a clearer, brighter, or higher-resolution image before treating the room as empty.";
+      "Turn on the room lights, use the original-resolution photo, and ask a staff member to walk through hidden areas before closing or declaring the room empty.";
   } else if (status === "over") {
     const excess = Math.max(0, detections.length - capacity);
     elements.imageRecommendationTitle.textContent = excess > 0
-      ? `Reduce occupancy by at least ${excess} ${excess === 1 ? "person" : "people"}`
-      : "The room has reached its configured capacity";
+      ? `Stop entry and move at least ${excess} ${excess === 1 ? "person" : "people"} to the overflow area`
+      : "Stop entry because the room has reached its limit";
     elements.imageRecommendationMessage.textContent =
-      "Pause additional entry, confirm the estimate with a quick visual check, and direct overflow to another safe area.";
+      "Place one staff member at the entrance, keep the exit and emergency route open, use one-out/one-in admission, and run another count after people have moved.";
   } else if (status === "near") {
     const remaining = Math.max(0, capacity - detections.length);
-    elements.imageRecommendationTitle.textContent = "Prepare to limit additional entry";
+    elements.imageRecommendationTitle.textContent =
+      "Assign an entrance monitor and prepare one-out/one-in admission";
     elements.imageRecommendationMessage.textContent =
-      `${remaining} ${remaining === 1 ? "place remains" : "places remain"} before the configured limit. Continue monitoring and prepare an overflow area.`;
+      `${remaining} ${remaining === 1 ? "place remains" : "places remain"}. Point visitors to the marked overflow or waiting area, keep the doorway clear, and recount after each group enters.`;
   } else {
     const remaining = Math.max(0, capacity - detections.length);
-    elements.imageRecommendationTitle.textContent = "Occupancy is within the configured limit";
+    elements.imageRecommendationTitle.textContent =
+      "Keep normal access open and schedule the next occupancy check";
     elements.imageRecommendationMessage.textContent =
-      `${remaining} ${remaining === 1 ? "place remains" : "places remain"}. Keep entrances clear and continue monitoring for changes.`;
+      `${remaining} ${remaining === 1 ? "place remains" : "places remain"}. Keep entrances and emergency exits unobstructed, record this result, and recount whenever a group enters or the room layout changes.`;
   }
 
   if (detections.length) {
@@ -1481,13 +1495,21 @@ function updateImageCorrectionUi() {
       "Tap the unwanted duplicate box to remove it from the final estimate.";
   } else {
     elements.imageCorrectionHint.textContent =
-      "Use these controls when occlusion causes a missed, merged, or duplicate box.";
+      "Select a tool; the image will move into view. Tap the person or box once.";
   }
 }
 
 function setImageCorrectionMode(mode) {
   state.imageCorrectionMode = state.imageCorrectionMode === mode ? null : mode;
   updateImageCorrectionUi();
+  if (state.imageCorrectionMode) {
+    window.requestAnimationFrame(() => {
+      elements.imageResultCanvas.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    });
+  }
 }
 
 function saveImageCorrectionSnapshot() {
@@ -1548,6 +1570,7 @@ function applyImageCorrection(event) {
   if (!mode) return;
   event.preventDefault();
   const point = imageCanvasPoint(event);
+  let appliedMessage = "Correction applied. The final count and download were updated.";
 
   if (mode === "add") {
     saveImageCorrectionSnapshot();
@@ -1564,6 +1587,7 @@ function applyImageCorrection(event) {
       scanId: `manual-add-${Date.now()}`,
       edgeCropped: false,
     });
+    appliedMessage = "Missed person added. The green M box is included in the final count.";
   } else if (mode === "split") {
     const target = detectionContainingPoint(point, true);
     if (!target) {
@@ -1596,6 +1620,7 @@ function applyImageCorrection(event) {
         scanId: `${splitId}-right`,
       },
     );
+    appliedMessage = "Merged detection split into two people. Both green M boxes are counted.";
   } else if (mode === "remove") {
     const target = detectionContainingPoint(point, false);
     if (!target) {
@@ -1608,12 +1633,15 @@ function applyImageCorrection(event) {
       state.imageAnalysisDetections.indexOf(target),
       1,
     );
+    appliedMessage = "Duplicate detection removed from the final count.";
   }
 
+  state.imageCorrectionMode = null;
   renderAnalyzedImage(
     state.imageAnalysisDetections,
     state.imageAnalysisProcessingMs,
   );
+  elements.imageCorrectionHint.textContent = appliedMessage;
 }
 
 function undoImageCorrection() {
@@ -1624,6 +1652,8 @@ function undoImageCorrection() {
     state.imageAnalysisDetections,
     state.imageAnalysisProcessingMs,
   );
+  elements.imageCorrectionHint.textContent =
+    "Last correction undone. The final count and download were restored.";
 }
 
 async function analyzeImageFile(file) {
@@ -2877,14 +2907,15 @@ function updateFlowTracking(tracks, now) {
     return;
   }
 
-  const sourceHeight = Math.max(1, elements.overlay.height);
+  const sourceWidth = Math.max(1, elements.overlay.width);
   const visibleTrackIds = new Set();
   for (const track of tracks) {
     visibleTrackIds.add(track.id);
-    const centerY = (track.bbox[1] + track.bbox[3] / 2) / sourceHeight;
-    const distanceFromLine = centerY - state.flowLinePosition;
+    const rawCenterX = (track.bbox[0] + track.bbox[2] / 2) / sourceWidth;
+    const centerX = state.mirrored ? 1 - rawCenterX : rawCenterX;
+    const distanceFromLine = centerX - state.flowLinePosition;
     if (Math.abs(distanceFromLine) < 0.035) continue;
-    const side = distanceFromLine < 0 ? "above" : "below";
+    const side = distanceFromLine < 0 ? "left" : "right";
     const flowTrack = state.flowTracks.get(track.id);
 
     if (!flowTrack) {
@@ -2911,15 +2942,15 @@ function updateFlowTracking(tracks, now) {
     }
 
     if (flowTrack.pendingHits < 2) continue;
-    const movedDown = flowTrack.stableSide === "above" && side === "below";
-    const isEntry = state.downIsEntry ? movedDown : !movedDown;
+    const movedRight = flowTrack.stableSide === "left" && side === "right";
+    const isEntry = state.rightIsEntry ? movedRight : !movedRight;
     if (isEntry) state.entered += 1;
     else state.exited += 1;
     saveFlowCounts();
     updateFlowUi();
     recordHistory(isEntry ? "entry" : "exit", {
       trackId: track.id,
-      direction: movedDown ? "down" : "up",
+      direction: movedRight ? "right" : "left",
     });
     flowTrack.stableSide = side;
     flowTrack.pendingSide = null;
@@ -2961,25 +2992,30 @@ function drawArea(context) {
 
 function drawFlowLine(context) {
   if (!state.flowEnabled) return;
-  const y = state.flowLinePosition * elements.overlay.height;
-  const direction = state.downIsEntry ? "ENTRY ↓" : "ENTRY ↑";
+  const x = state.flowLinePosition * elements.overlay.width;
+  const direction = state.rightIsEntry ? "ENTRY →" : "ENTRY ←";
   context.save();
   context.setLineDash([18, 10]);
   context.lineWidth = Math.max(3, elements.overlay.width / 220);
   context.strokeStyle = "#ffc857";
   context.beginPath();
-  context.moveTo(0, y);
-  context.lineTo(elements.overlay.width, y);
+  context.moveTo(x, 0);
+  context.lineTo(x, elements.overlay.height);
   context.stroke();
   context.setLineDash([]);
   context.font =
     "800 " + Math.max(13, elements.overlay.width / 45) + "px system-ui";
   const textWidth = context.measureText(direction).width;
   const labelHeight = Math.max(22, elements.overlay.width / 30);
+  const labelWidth = textWidth + 14;
+  const labelX = state.rightIsEntry
+    ? clamp(x + 6, 8, elements.overlay.width - labelWidth - 8)
+    : clamp(x - labelWidth - 6, 8, elements.overlay.width - labelWidth - 8);
+  const labelY = 10;
   context.fillStyle = "#ffc857";
-  context.fillRect(8, Math.max(0, y - labelHeight), textWidth + 14, labelHeight);
+  context.fillRect(labelX, labelY, labelWidth, labelHeight);
   context.fillStyle = "#17191d";
-  context.fillText(direction, 15, Math.max(1, y - labelHeight + 2));
+  context.fillText(direction, labelX + 7, labelY + 2);
   context.restore();
 }
 
@@ -3497,7 +3533,7 @@ elements.removeDetectionButton.addEventListener("click", () => {
   setImageCorrectionMode("remove");
 });
 elements.undoImageCorrectionButton.addEventListener("click", undoImageCorrection);
-elements.imageResultCanvas.addEventListener("pointerdown", applyImageCorrection);
+elements.imageResultCanvas.addEventListener("click", applyImageCorrection);
 elements.imageFileInput.addEventListener("change", () => {
   const [file] = elements.imageFileInput.files || [];
   if (file) void analyzeImageFile(file);
@@ -3539,13 +3575,16 @@ elements.flowLineInput.addEventListener("input", () => {
   state.flowLinePosition = Number(elements.flowLineInput.value) / 100;
   state.flowTracks.clear();
   updateFlowUi();
-  localStorage.setItem("flowLinePosition", String(state.flowLinePosition));
+  localStorage.setItem(
+    "verticalFlowLinePosition",
+    String(state.flowLinePosition),
+  );
   drawDetections(state.lastConfirmedTracks);
 });
 elements.flowDirectionButton.addEventListener("click", () => {
-  state.downIsEntry = !state.downIsEntry;
+  state.rightIsEntry = !state.rightIsEntry;
   state.flowTracks.clear();
-  localStorage.setItem("downIsEntry", String(state.downIsEntry));
+  localStorage.setItem("rightIsEntry", String(state.rightIsEntry));
   updateFlowUi();
   drawDetections(state.lastConfirmedTracks);
 });

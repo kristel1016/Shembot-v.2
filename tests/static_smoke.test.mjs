@@ -123,6 +123,13 @@ assert.match(app, /Box percentages are detection confidence, not system accuracy
 assert.match(app, /function startRecording/);
 assert.match(app, /function stopRecording/);
 assert.match(app, /recordingCanvas\.captureStream\(20\)/);
+assert.match(app, /video\/mp4;codecs=avc1\.42E01E/);
+assert.ok(
+  app.indexOf('mimeType: "video/mp4') < app.indexOf('mimeType: "video/webm'),
+  "recording should prefer phone-compatible MP4 before WebM",
+);
+assert.match(app, /format\?\.extension === "mp4"\) recorder\.start\(\)/);
+assert.match(app, /URL\.revokeObjectURL\(url\), 60_000/);
 assert.match(app, /formatRecordingTimestamp/);
 assert.match(app, /video-recording-start/);
 assert.match(app, /video-recording-end/);
@@ -138,7 +145,7 @@ assert.match(app, /multiPersonDetections/);
 assert.match(app, /function refineMergedImageCandidates/);
 assert.match(app, /selectDistinctSplitPair/);
 assert.match(app, /recoveredFromMergedBox/);
-assert.match(app, /detection_geometry\.js\?v=20261124-crowd1/);
+assert.match(app, /detection_geometry\.js\?v=20261124-ops1/);
 assert.match(app, /function motionAwareTrackMatchScore/);
 assert.match(app, /function canReacquireMovingTrack/);
 assert.match(app, /function isTrackVisible/);
@@ -155,9 +162,16 @@ assert.match(app, /function suggestedManualBoxSize/);
 assert.match(app, /manualCorrection:\s*"added"/);
 assert.match(app, /manualCorrection:\s*"split"/);
 assert.match(app, /function undoImageCorrection/);
+assert.match(app, /scrollIntoView/);
+assert.match(app, /imageResultCanvas\.addEventListener\("click", applyImageCorrection\)/);
 assert.match(app, /strongStandalonePose/);
 assert.match(app, /haveDistinctPoseIdentities/);
-assert.match(app, /Reduce occupancy by at least/);
+assert.match(app, /Stop entry and move at least/);
+assert.match(app, /const movedRight/);
+assert.match(app, /const centerX = state\.mirrored \? 1 - rawCenterX : rawCenterX/);
+assert.match(app, /rightIsEntry/);
+assert.match(app, /context\.moveTo\(x, 0\)/);
+assert.match(app, /ENTRY →/);
 assert.match(app, /average confidence/);
 assert.match(app, /image\/jpeg.*image\/png.*image\/webp/s);
 
