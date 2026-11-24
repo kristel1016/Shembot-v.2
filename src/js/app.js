@@ -4,8 +4,10 @@ import {
   PoseLandmarker,
 } from "../../lib/mediapipe/vision_bundle.js";
 import {
+  areOppositeSplitPairMembers,
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
+  selectDistinctSplitPair,
 } from "./detection_geometry.js";
 
 const MEDIAPIPE_WASM = new URL(
@@ -1092,6 +1094,107 @@ function imageScanAreas(width, height) {
   ];
 }
 
+function mergedPairScanParents(candidates, width, height) {
+  const frameArea = Math.max(1, width * height);
+  const plausible = candidates
+    .filter((candidate) => {
+      const [x, y, boxWidth, boxHeight] = candidate.bbox;
+      const aspectWidth = boxWidth / Math.max(1, boxHeight);
+      const areaRatio = boxArea(candidate.bbox) / frameArea;
+      return (
+        candidate.score >= IMAGE_DETECTOR_SCORE_FLOOR &&
+        aspectWidth >= 0.4 &&
+        aspectWidth <= 1.3 &&
+        areaRatio >= 0.012 &&
+        areaRatio <= 0.34 &&
+        boxHeight >= height * 0.16 &&
+        x + boxWidth > 0 &&
+        y + boxHeight > 0
+      );
+    })
+    .sort((first, second) => boxArea(second.bbox) - boxArea(first.bbox));
+  const unique = [];
+  for (const candidate of plausible) {
+    if (!unique.some((kept) => boxesAreDuplicate(kept.bbox, candidate.bbox))) {
+      unique.push(candidate);
+    }
+    if (unique.length >= 8) break;
+  }
+  return unique;
+}
+
+function refineMergedImageCandidates(detector, candidates, width, height) {
+  const additions = [];
+  const parents = mergedPairScanParents(candidates, width, height);
+
+  parents.forEach((parent, parentIndex) => {
+    const [parentX, parentY, parentWidth, parentHeight] = parent.bbox;
+    const paddingX = parentWidth * 0.08;
+    const paddingY = parentHeight * 0.06;
+    const cropLeft = clamp(parentX - paddingX, 0, width);
+    const cropTop = clamp(parentY - paddingY, 0, height);
+    const cropRight = clamp(parentX + parentWidth + paddingX, 0, width);
+    const cropBottom = clamp(parentY + parentHeight + paddingY, 0, height);
+    const cropWidth = Math.max(1, cropRight - cropLeft);
+    const cropHeight = Math.max(1, cropBottom - cropTop);
+    const halfScanWidth = Math.max(1, Math.round(cropWidth * 0.62));
+    const outputHeight = Math.max(1, Math.round(cropHeight));
+    const scans = [
+      { side: "left", x: cropLeft },
+      { side: "right", x: cropRight - halfScanWidth },
+    ];
+    const recovered = [];
+
+    scans.forEach((scan) => {
+      imageScanCanvas.width = halfScanWidth;
+      imageScanCanvas.height = outputHeight;
+      imageScanContext.drawImage(
+        imageSourceCanvas,
+        scan.x,
+        cropTop,
+        halfScanWidth,
+        cropHeight,
+        0,
+        0,
+        halfScanWidth,
+        outputHeight,
+      );
+      const scanFrame = imageFrame(halfScanWidth, outputHeight);
+      const result = detector.detect(imageScanCanvas);
+      for (const detection of result.detections || []) {
+        if (!isPlausiblePerson(detection, scanFrame, 0.20)) continue;
+        const category = getCategory(detection);
+        const box = detection.boundingBox;
+        recovered.push({
+          bbox: [
+            scan.x + box.originX,
+            cropTop + box.originY,
+            box.width,
+            box.height,
+          ],
+          score: category.score,
+          splitSide: scan.side,
+        });
+      }
+    });
+
+    const pair = selectDistinctSplitPair(parent, recovered);
+    if (pair.length !== 2) return;
+    const splitPairId = `merged-pair-${parentIndex}`;
+    pair.forEach((person) => additions.push({
+      ...person,
+      splitPairId,
+      fromFullScan: false,
+      scanId: `${splitPairId}-${person.splitSide}`,
+      relativeScanArea: boxArea(person.bbox) / Math.max(1, width * height),
+      edgeCropped: false,
+      recoveredFromMergedBox: true,
+    }));
+  });
+
+  return [...candidates, ...additions];
+}
+
 async function getImageDetector() {
   if (state.imageDetector) return state.imageDetector;
   if (state.imageDetectorPromise) return state.imageDetectorPromise;
@@ -1309,6 +1412,12 @@ async function analyzeImageFile(file) {
       }
     }
 
+    const refinedCandidates = refineMergedImageCandidates(
+      detector,
+      candidates,
+      width,
+      height,
+    );
     const fullFrame = imageFrame(width, height);
     let poseDetections = [];
     if (state.poseLandmarker) {
@@ -1324,8 +1433,8 @@ async function analyzeImageFile(file) {
       }
     }
     const withPoseEvidence = state.poseLandmarker
-      ? attachPoseEvidence(candidates, poseDetections, fullFrame)
-      : candidates.map((candidate) => ({
+      ? attachPoseEvidence(refinedCandidates, poseDetections, fullFrame)
+      : refinedCandidates.map((candidate) => ({
         ...candidate,
         verifiedByPose: false,
         poseScore: null,
@@ -2267,6 +2376,7 @@ function consolidateDetections(detections) {
   for (const detection of sorted) {
     if (!unique.some((kept) =>
       !haveDistinctPoseIdentities(kept, detection) &&
+      !areOppositeSplitPairMembers(kept, detection) &&
       (
         boxesAreDuplicate(kept.bbox, detection.bbox) ||
         looksLikeSamePersonAcrossScales(kept, detection)

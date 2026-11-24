@@ -4,8 +4,10 @@ import { constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
+  areOppositeSplitPairMembers,
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
+  selectDistinctSplitPair,
 } from "../src/js/detection_geometry.js";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -123,6 +125,9 @@ assert.match(app, /xPositions\s*=\s*\[0, Math\.round\(right \/ 2\), right\]/);
 assert.match(app, /createImageDetector\(state\.vision, "CPU", FALLBACK_MODEL_PATH\)/);
 assert.match(app, /candidate\.score >= IMAGE_DETECTOR_SCORE_FLOOR/);
 assert.match(app, /multiPersonDetections/);
+assert.match(app, /function refineMergedImageCandidates/);
+assert.match(app, /selectDistinctSplitPair/);
+assert.match(app, /recoveredFromMergedBox/);
 assert.match(app, /strongStandalonePose/);
 assert.match(app, /haveDistinctPoseIdentities/);
 assert.match(app, /Reduce occupancy by at least/);
@@ -195,6 +200,33 @@ assert.equal(
   haveDistinctPoseIdentities({ poseId: 1 }, { poseId: 1 }),
   false,
   "detections backed by the same pose may still be deduplicated",
+);
+
+const mergedPairParent = { bbox: [200, 160, 180, 300], score: 0.64 };
+const recoveredPair = [
+  { bbox: [206, 166, 92, 286], score: 0.71, splitSide: "left" },
+  { bbox: [292, 170, 80, 282], score: 0.67, splitSide: "right" },
+];
+assert.deepEqual(
+  selectDistinctSplitPair(mergedPairParent, recoveredPair),
+  recoveredPair,
+  "a broad box with two separated full-height people should split into two",
+);
+assert.deepEqual(
+  selectDistinctSplitPair(mergedPairParent, [
+    recoveredPair[0],
+    { ...recoveredPair[0], bbox: [214, 168, 88, 280], splitSide: "right" },
+  ]),
+  [],
+  "two scans of the same centered person must not create a false pair",
+);
+assert.equal(
+  areOppositeSplitPairMembers(
+    { splitPairId: "pair-1", splitSide: "left" },
+    { splitPairId: "pair-1", splitSide: "right" },
+  ),
+  true,
+  "opposite members of one recovered pair must remain separate",
 );
 
 console.log(`SHEMBOT checkpoint smoke test passed (${requiredFiles.length} assets).`);

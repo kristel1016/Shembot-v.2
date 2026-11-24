@@ -14,6 +14,89 @@ export function haveDistinctPoseIdentities(first, second) {
   );
 }
 
+export function areOppositeSplitPairMembers(first, second) {
+  return (
+    typeof first.splitPairId === "string" &&
+    first.splitPairId === second.splitPairId &&
+    (first.splitSide === "left" || first.splitSide === "right") &&
+    (second.splitSide === "left" || second.splitSide === "right") &&
+    first.splitSide !== second.splitSide
+  );
+}
+
+function intersectionOverArea(inner, outer) {
+  const left = Math.max(inner[0], outer[0]);
+  const top = Math.max(inner[1], outer[1]);
+  const right = Math.min(inner[0] + inner[2], outer[0] + outer[2]);
+  const bottom = Math.min(inner[1] + inner[3], outer[1] + outer[3]);
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  return intersection / Math.max(1, boxArea(inner));
+}
+
+/**
+ * Select two full-height, horizontally distinct people recovered by rescanning
+ * the left and right portions of one broad detector box. Requiring opposite
+ * scan sides, strong parent containment, and separated centers avoids turning
+ * two partial boxes for one person into a false pair.
+ */
+export function selectDistinctSplitPair(parent, detections) {
+  const parentBox = parent?.bbox;
+  if (!parentBox || parentBox[2] / Math.max(1, parentBox[3]) < 0.4) return [];
+
+  const parentLeft = parentBox[0];
+  const parentTop = parentBox[1];
+  const parentWidth = parentBox[2];
+  const parentHeight = parentBox[3];
+  const parentMidpoint = parentLeft + parentWidth / 2;
+  const eligible = detections.filter((detection) => {
+    const box = detection?.bbox;
+    if (!box || detection.score < 0.24) return false;
+    const centerX = box[0] + box[2] / 2;
+    const centerY = box[1] + box[3] / 2;
+    return (
+      (detection.splitSide === "left" || detection.splitSide === "right") &&
+      intersectionOverArea(box, parentBox) >= 0.72 &&
+      box[3] >= parentHeight * 0.5 &&
+      box[2] <= parentWidth * 0.76 &&
+      box[3] / Math.max(1, box[2]) >= 0.9 &&
+      centerX >= parentLeft - parentWidth * 0.04 &&
+      centerX <= parentLeft + parentWidth * 1.04 &&
+      centerY >= parentTop + parentHeight * 0.25 &&
+      centerY <= parentTop + parentHeight * 0.78
+    );
+  });
+
+  let bestPair = [];
+  let bestScore = -Infinity;
+  for (const left of eligible.filter((item) => item.splitSide === "left")) {
+    const leftCenterX = left.bbox[0] + left.bbox[2] / 2;
+    if (leftCenterX > parentMidpoint + parentWidth * 0.08) continue;
+    for (const right of eligible.filter((item) => item.splitSide === "right")) {
+      const rightCenterX = right.bbox[0] + right.bbox[2] / 2;
+      if (rightCenterX < parentMidpoint - parentWidth * 0.08) continue;
+      const separation = rightCenterX - leftCenterX;
+      if (separation < parentWidth * 0.22) continue;
+
+      const top = Math.max(left.bbox[1], right.bbox[1]);
+      const bottom = Math.min(
+        left.bbox[1] + left.bbox[3],
+        right.bbox[1] + right.bbox[3],
+      );
+      const verticalOverlap = Math.max(0, bottom - top) /
+        Math.max(1, Math.min(left.bbox[3], right.bbox[3]));
+      if (verticalOverlap < 0.48) continue;
+
+      const score = left.score + right.score + separation / parentWidth;
+      if (score > bestScore) {
+        bestScore = score;
+        bestPair = [left, right];
+      }
+    }
+  }
+
+  return bestPair;
+}
+
 /**
  * Detect one person represented by differently cropped boxes from full-frame,
  * tiled, or pose-assisted scans. The conservative alignment checks avoid
