@@ -77,7 +77,7 @@ assert.match(app, /function attachPoseEvidence/);
 assert.match(app, /DETECTOR_ONLY_SCORE_FLOOR/);
 assert.match(app, /DETECTOR_ONLY_FAST_SCORE/);
 assert.match(app, /DETECTOR_ONLY_SCORE_FLOOR\s*=\s*0\.50/);
-assert.match(app, /IMAGE_DETECTOR_SCORE_FLOOR\s*=\s*0\.25/);
+assert.match(app, /IMAGE_DETECTOR_SCORE_FLOOR\s*=\s*0\.30/);
 assert.match(app, /IMAGE_PROPOSAL_SCORE_FLOOR\s*=\s*0\.15/);
 assert.match(app, /TRACK_HOLD_MS\s*=\s*3500/);
 assert.match(app, /looksLikeSamePersonAcrossScales/);
@@ -158,6 +158,22 @@ assert.equal(
   ),
   true,
   "aligned duplicates from different image tiles should merge",
+);
+assert.equal(
+  looksLikeSamePersonAcrossScales(
+    { bbox: [100, 100, 110, 220], score: 0.62, scanId: "tile-0-0" },
+    { bbox: [111, 108, 104, 211], score: 0.41, scanId: "tile-0-1" },
+  ),
+  true,
+  "near-identical boxes from overlapping tiles should merge",
+);
+assert.equal(
+  looksLikeSamePersonAcrossScales(
+    { bbox: [100, 100, 110, 220], score: 0.62, scanId: "tile-0-0" },
+    { bbox: [180, 105, 105, 215], score: 0.55, scanId: "tile-0-1" },
+  ),
+  false,
+  "adjacent people from overlapping tiles should remain separate",
 );
 
 console.log(`SHEMBOT checkpoint smoke test passed (${requiredFiles.length} assets).`);

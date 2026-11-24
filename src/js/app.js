@@ -29,7 +29,7 @@ const POSE_ASSISTED_SCORE_FLOOR = 0.18;
 const DETECTOR_ONLY_SCORE_FLOOR = 0.50;
 const DETECTOR_ONLY_FAST_SCORE = 0.68;
 const IMAGE_PROPOSAL_SCORE_FLOOR = 0.15;
-const IMAGE_DETECTOR_SCORE_FLOOR = 0.25;
+const IMAGE_DETECTOR_SCORE_FLOOR = 0.30;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const POSE_VERIFICATION_INTERVAL_MS = 420;
 const POSE_CACHE_MS = 1600;
@@ -1138,19 +1138,27 @@ function renderAnalyzedImage(detections, processingMs) {
       ? "NEAR CAPACITY"
       : "SAFE";
   const lineWidth = Math.max(3, Math.round(Math.min(width, height) / 260));
-  const fontSize = Math.max(16, Math.round(Math.min(width, height) / 30));
+  const denseImage = detections.length > 12;
+  const fontSize = Math.max(
+    denseImage ? 13 : 16,
+    Math.round(Math.min(width, height) / (denseImage ? 40 : 30)),
+  );
   context.lineWidth = lineWidth;
   context.font = `800 ${fontSize}px Inter, system-ui, sans-serif`;
   context.textBaseline = "top";
 
   detections.forEach((detection, index) => {
     const [x, y, boxWidth, boxHeight] = detection.bbox;
-    const label = `P${index + 1} ${Math.round(detection.score * 100)}%`;
+    const label = denseImage
+      ? `P${index + 1}`
+      : `P${index + 1} ${Math.round(detection.score * 100)}%`;
     context.strokeStyle = accent;
     context.strokeRect(x, y, boxWidth, boxHeight);
     const textWidth = context.measureText(label).width;
     const labelHeight = fontSize + 10;
-    const labelY = Math.max(0, y - labelHeight);
+    const labelY = denseImage
+      ? Math.max(0, y + lineWidth)
+      : Math.max(0, y - labelHeight);
     context.fillStyle = accent;
     context.fillRect(x, labelY, textWidth + 14, labelHeight);
     context.fillStyle = "#07111f";
