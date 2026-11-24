@@ -3,7 +3,10 @@ import { access, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { looksLikeSamePersonAcrossScales } from "../src/js/detection_geometry.js";
+import {
+  haveDistinctPoseIdentities,
+  looksLikeSamePersonAcrossScales,
+} from "../src/js/detection_geometry.js";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(testDir, "..");
@@ -43,6 +46,9 @@ for (const id of [
   "imageResultCanvas",
   "imagePeopleCount",
   "downloadImageResultButton",
+  "imageResultGuidance",
+  "imageRecommendationTitle",
+  "imageRecommendationMessage",
   "countValue",
   "capacityMetric",
   "capacityStatus",
@@ -116,6 +122,11 @@ assert.match(app, /imageScanAreas/);
 assert.match(app, /xPositions\s*=\s*\[0, Math\.round\(right \/ 2\), right\]/);
 assert.match(app, /createImageDetector\(state\.vision, "CPU", FALLBACK_MODEL_PATH\)/);
 assert.match(app, /candidate\.score >= IMAGE_DETECTOR_SCORE_FLOOR/);
+assert.match(app, /multiPersonDetections/);
+assert.match(app, /strongStandalonePose/);
+assert.match(app, /haveDistinctPoseIdentities/);
+assert.match(app, /Reduce occupancy by at least/);
+assert.match(app, /average confidence/);
 assert.match(app, /image\/jpeg.*image\/png.*image\/webp/s);
 
 const screenshotUpperBody = {
@@ -174,6 +185,16 @@ assert.equal(
   ),
   false,
   "adjacent people from overlapping tiles should remain separate",
+);
+assert.equal(
+  haveDistinctPoseIdentities({ poseId: 1 }, { poseId: 2 }),
+  true,
+  "detections backed by different poses must remain separate people",
+);
+assert.equal(
+  haveDistinctPoseIdentities({ poseId: 1 }, { poseId: 1 }),
+  false,
+  "detections backed by the same pose may still be deduplicated",
 );
 
 console.log(`SHEMBOT checkpoint smoke test passed (${requiredFiles.length} assets).`);

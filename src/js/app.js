@@ -3,7 +3,10 @@ import {
   ObjectDetector,
   PoseLandmarker,
 } from "../../lib/mediapipe/vision_bundle.js";
-import { looksLikeSamePersonAcrossScales } from "./detection_geometry.js";
+import {
+  haveDistinctPoseIdentities,
+  looksLikeSamePersonAcrossScales,
+} from "./detection_geometry.js";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -75,6 +78,9 @@ const elements = {
   imageCapacityStatus: document.querySelector("#imageCapacityStatus"),
   imageProcessingTime: document.querySelector("#imageProcessingTime"),
   imageDetectionDetails: document.querySelector("#imageDetectionDetails"),
+  imageResultGuidance: document.querySelector("#imageResultGuidance"),
+  imageRecommendationTitle: document.querySelector("#imageRecommendationTitle"),
+  imageRecommendationMessage: document.querySelector("#imageRecommendationMessage"),
   areaStatus: document.querySelector("#areaStatus"),
   zoneSelection: document.querySelector("#zoneSelection"),
   zoneDraft: document.querySelector("#zoneDraft"),
@@ -1128,10 +1134,8 @@ function renderAnalyzedImage(detections, processingMs) {
   context.drawImage(imageSourceCanvas, 0, 0);
   const styles = getComputedStyle(document.documentElement);
   const accent = styles.getPropertyValue("--accent").trim() || "#5b7fd4";
-  const status = getCapacityStatus(
-    detections.length,
-    Number(elements.capacityInput.value),
-  );
+  const capacity = Number(elements.capacityInput.value);
+  const status = getCapacityStatus(detections.length, capacity);
   const statusLabel = status === "over"
     ? "OVER CAPACITY"
     : status === "near"
@@ -1194,11 +1198,46 @@ function renderAnalyzedImage(detections, processingMs) {
   elements.imageCapacityStatus.textContent = statusLabel;
   elements.imageCapacityStatus.dataset.status = status;
   elements.imageProcessingTime.textContent = `${Math.round(processingMs)} ms`;
-  elements.imageDetectionDetails.textContent = detections.length
-    ? `${detections.map((detection, index) =>
-      `P${index + 1}: ${Math.round(detection.score * 100)}% confidence`
-    ).join(" • ")}. Confidence is not system accuracy.`
-    : "No people passed the crowd-image threshold. Try a clearer or higher-resolution image.";
+  elements.imageResultGuidance.dataset.status = status;
+  if (detections.length === 0) {
+    elements.imageRecommendationTitle.textContent = "Review the image before deciding";
+    elements.imageRecommendationMessage.textContent =
+      "No people passed the threshold. Try a clearer, brighter, or higher-resolution image before treating the room as empty.";
+  } else if (status === "over") {
+    const excess = Math.max(0, detections.length - capacity);
+    elements.imageRecommendationTitle.textContent = excess > 0
+      ? `Reduce occupancy by at least ${excess} ${excess === 1 ? "person" : "people"}`
+      : "The room has reached its configured capacity";
+    elements.imageRecommendationMessage.textContent =
+      "Pause additional entry, confirm the estimate with a quick visual check, and direct overflow to another safe area.";
+  } else if (status === "near") {
+    const remaining = Math.max(0, capacity - detections.length);
+    elements.imageRecommendationTitle.textContent = "Prepare to limit additional entry";
+    elements.imageRecommendationMessage.textContent =
+      `${remaining} ${remaining === 1 ? "place remains" : "places remain"} before the configured limit. Continue monitoring and prepare an overflow area.`;
+  } else {
+    const remaining = Math.max(0, capacity - detections.length);
+    elements.imageRecommendationTitle.textContent = "Occupancy is within the configured limit";
+    elements.imageRecommendationMessage.textContent =
+      `${remaining} ${remaining === 1 ? "place remains" : "places remain"}. Keep entrances clear and continue monitoring for changes.`;
+  }
+
+  if (detections.length) {
+    const confidenceValues = detections.map((detection) =>
+      Math.round(detection.score * 100)
+    );
+    const averageConfidence = Math.round(average(confidenceValues));
+    const minimumConfidence = Math.min(...confidenceValues);
+    const maximumConfidence = Math.max(...confidenceValues);
+    elements.imageDetectionDetails.textContent =
+      `${detections.length} individual detections accepted • ` +
+      `average confidence ${averageConfidence}% • ` +
+      `range ${minimumConfidence}–${maximumConfidence}%. ` +
+      "Confidence is not system accuracy; visually confirm the estimated count.";
+  } else {
+    elements.imageDetectionDetails.textContent =
+      "No confidence summary is available because no person detections were accepted.";
+  }
 }
 
 async function analyzeImageFile(file) {
@@ -2108,22 +2147,59 @@ function poseMatchQuality(detection, pose) {
   return overlap * 2 + containment + proximity * 0.5;
 }
 
+function posesAreDuplicate(first, second) {
+  const overlap = intersectionOverUnion(first.bbox, second.bbox);
+  const containment = intersectionOverSmaller(first.bbox, second.bbox);
+  const firstCenter = boxCenter(first.bbox);
+  const secondCenter = boxCenter(second.bbox);
+  const distance = Math.hypot(
+    firstCenter[0] - secondCenter[0],
+    firstCenter[1] - secondCenter[1],
+  );
+  const smallerDiagonal = Math.max(
+    1,
+    Math.min(
+      Math.hypot(first.bbox[2], first.bbox[3]),
+      Math.hypot(second.bbox[2], second.bbox[3]),
+    ),
+  );
+  return (
+    overlap >= 0.78 ||
+    (containment >= 0.92 && distance <= smallerDiagonal * 0.2)
+  );
+}
+
 function attachPoseEvidence(people, poses, frame) {
   // Pose is supporting evidence, not a hard gate. Each detector candidate is
-  // retained, while a one-to-one pose match can confirm it immediately.
-  const availableDetections = new Set(people.map((_, index) => index));
+  // retained, while a one-to-one pose match can confirm it immediately. When
+  // one broad detector box spans multiple strong poses, replace it with the
+  // individual pose boxes so two close people are not counted as one.
   const candidates = people.map((detection) => ({
     ...detection,
     verifiedByPose: false,
     poseScore: null,
+    poseId: null,
   }));
   const uniquePoses = [];
 
   for (const pose of [...poses].sort((first, second) => second.score - first.score)) {
-    if (!uniquePoses.some((kept) => boxesAreDuplicate(kept.bbox, pose.bbox))) {
-      uniquePoses.push(pose);
+    if (!uniquePoses.some((kept) => posesAreDuplicate(kept, pose))) {
+      uniquePoses.push({ ...pose, poseId: uniquePoses.length + 1 });
     }
   }
+
+  const multiPersonDetections = new Set();
+  people.forEach((person, index) => {
+    const strongPoseMatches = uniquePoses.filter((pose) =>
+      pose.strongStandalonePose && poseMatchQuality(person, pose) > 0.8
+    );
+    if (strongPoseMatches.length >= 2) multiPersonDetections.add(index);
+  });
+  const availableDetections = new Set(
+    people
+      .map((_, index) => index)
+      .filter((index) => !multiPersonDetections.has(index)),
+  );
 
   for (const pose of uniquePoses) {
     let bestIndex = -1;
@@ -2135,7 +2211,24 @@ function attachPoseEvidence(people, poses, frame) {
         bestQuality = quality;
       }
     }
-    if (bestIndex < 0) continue;
+    if (bestIndex < 0) {
+      if (pose.strongStandalonePose) {
+        candidates.push({
+          bbox: [...pose.bbox],
+          score: pose.score,
+          poseScore: pose.score,
+          poseId: pose.poseId,
+          verifiedByPose: true,
+          standalonePose: true,
+          fromFullScan: true,
+          scanId: `pose-${pose.poseId}`,
+          relativeScanArea: boxArea(pose.bbox) /
+            Math.max(1, frame.sourceWidth * frame.sourceHeight),
+          edgeCropped: false,
+        });
+      }
+      continue;
+    }
 
     const detection = candidates[bestIndex];
     availableDetections.delete(bestIndex);
@@ -2145,6 +2238,7 @@ function attachPoseEvidence(people, poses, frame) {
       // part. Keep the detector's full-person box after pose verification.
       bbox: [...detection.bbox],
       poseScore: pose.score,
+      poseId: pose.poseId,
       relativeScanArea: boxArea(detection.bbox) /
         Math.max(1, frame.sourceWidth * frame.sourceHeight),
       edgeCropped: false,
@@ -2152,7 +2246,9 @@ function attachPoseEvidence(people, poses, frame) {
     };
   }
 
-  return candidates;
+  return candidates.filter((_, index) =>
+    index >= people.length || !multiPersonDetections.has(index)
+  );
 }
 
 function consolidateDetections(detections) {
@@ -2170,8 +2266,11 @@ function consolidateDetections(detections) {
 
   for (const detection of sorted) {
     if (!unique.some((kept) =>
-      boxesAreDuplicate(kept.bbox, detection.bbox) ||
-      looksLikeSamePersonAcrossScales(kept, detection)
+      !haveDistinctPoseIdentities(kept, detection) &&
+      (
+        boxesAreDuplicate(kept.bbox, detection.bbox) ||
+        looksLikeSamePersonAcrossScales(kept, detection)
+      )
     )) {
       unique.push(detection);
     }

@@ -6,6 +6,14 @@ function hasPoseEvidence(detection) {
   return Boolean(detection.verifiedByPose || detection.poseHits > 0);
 }
 
+export function haveDistinctPoseIdentities(first, second) {
+  return (
+    Number.isInteger(first.poseId) &&
+    Number.isInteger(second.poseId) &&
+    first.poseId !== second.poseId
+  );
+}
+
 /**
  * Detect one person represented by differently cropped boxes from full-frame,
  * tiled, or pose-assisted scans. The conservative alignment checks avoid

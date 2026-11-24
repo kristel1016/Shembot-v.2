@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f3f6ff" />
     <meta name="description" content="Private, on-device people counting from your phone or laptop camera." />
     <title>Shembot Vision Console</title>
-    <link rel="stylesheet" href="./assets/css/styles.css?v=20261124-image1" />
+    <link rel="stylesheet" href="./assets/css/styles.css?v=20261124-image4" />
     <script>
       /* Universal range-progress tracker for custom slider fill */
       function syncRangeProgress(el) {
@@ -34,7 +34,7 @@
       });
       window.addEventListener('resize', syncWorkspaceScale, { passive: true });
     </script>
-    <script defer src="./src/js/boot.js?v=20261124-image3"></script>
+    <script defer src="./src/js/boot.js?v=20261124-image4"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -376,7 +376,17 @@
               <span><small>Room status</small><strong id="imageCapacityStatus" data-status="safe">SAFE</strong></span>
               <span><small>Processing</small><strong id="imageProcessingTime">0 ms</strong></span>
             </div>
-            <p class="image-detection-details" id="imageDetectionDetails">No detections yet.</p>
+            <aside class="image-result-guidance" id="imageResultGuidance" data-status="safe">
+              <span class="image-guidance-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 2a8 8 0 0 0-5 14.2V20h10v-3.8A8 8 0 0 0 12 2Zm3 13.2V18H9v-2.8l-.8-.6A6 6 0 1 1 15.8 14l-.8.6v.6ZM9 22h6v-2H9v2Z" /></svg>
+              </span>
+              <span>
+                <small>Suggested action</small>
+                <strong id="imageRecommendationTitle">Analyze an image to receive guidance</strong>
+                <p id="imageRecommendationMessage">The recommendation will use the detected count and configured room capacity.</p>
+              </span>
+            </aside>
+            <p class="image-detection-details" id="imageDetectionDetails">No confidence summary yet.</p>
             <div class="image-result-actions">
               <button class="secondary-button" id="chooseAnotherImageButton" type="button">Choose another image</button>
               <button class="primary-button" id="downloadImageResultButton" type="button">Download result</button>
