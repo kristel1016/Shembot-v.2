@@ -7,9 +7,12 @@ import {
   areAlignedBodyPartDetections,
   areOppositeSplitPairMembers,
   haveDistinctPoseIdentities,
+  isWideEnoughForSplit,
   looksLikeSamePersonAcrossScales,
+  matchesCropFragment,
   selectDistinctSplitPair,
-} from "./detection_geometry.js?v=20261125-ops7";
+  touchesInteriorCropEdge,
+} from "./detection_geometry.js?v=20261125-ops8";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -1163,6 +1166,7 @@ function appendImageScanDetections(
       if (!isPlausiblePerson(detection, frame, IMAGE_PROPOSAL_SCORE_FLOOR)) continue;
       const category = getCategory(detection);
       const box = detection.boundingBox;
+      const localBox = [box.originX, box.originY, box.width, box.height];
       candidates.push({
         bbox: [
           area.x + box.originX,
@@ -1174,6 +1178,7 @@ function appendImageScanDetections(
         fromFullScan: area.kind === "full",
         fromDetailedScan: area.kind === "detail",
         scanId: area.scanId,
+        clippedByImageTile: touchesInteriorCropEdge(localBox, area, imageWidth, imageHeight),
         relativeScanArea: (box.width * box.height) /
           Math.max(1, imageWidth * imageHeight),
         edgeCropped: false,
@@ -1202,7 +1207,8 @@ function mergedPairScanParents(candidates, width, height) {
       const areaRatio = boxArea(candidate.bbox) / frameArea;
       return (
         candidate.score >= IMAGE_DETECTOR_SCORE_FLOOR &&
-        aspectWidth >= 0.4 &&
+        !candidate.clippedByImageTile &&
+        isWideEnoughForSplit(candidate.bbox) &&
         aspectWidth <= 1.3 &&
         areaRatio >= 0.012 &&
         areaRatio <= 0.34 &&
@@ -1280,12 +1286,31 @@ function refineMergedImageCandidates(detector, candidates, width, height) {
           ],
           score: category.score,
           splitSide: scan.side,
+          scanWidth: scan.width,
         });
       }
     });
 
-    const pair = selectDistinctSplitPair(parent, recovered);
-    if (pair.length !== 2) return;
+    // Require evidence from two different scan windows for each person.
+    // The wide parent is too broad to corroborate an individual member.
+    const independentlySeen = new Set(recovered.filter((member) =>
+      candidates.some((candidate) =>
+        !candidate.clippedByImageTile &&
+        candidate.bbox[2] <= parentWidth * 0.72 &&
+        candidate.bbox[3] >= member.bbox[3] * 0.42 &&
+        matchesCropFragment(candidate, member)
+      )
+    ));
+    const supported = recovered.filter((member) =>
+      independentlySeen.has(member) || recovered.some((other) =>
+        other.splitSide === member.splitSide &&
+        other.scanWidth !== member.scanWidth &&
+        other.bbox[3] >= member.bbox[3] * 0.75 &&
+        matchesCropFragment(other, member)
+      )
+    );
+    const pair = selectDistinctSplitPair(parent, supported);
+    if (pair.length !== 2 || !pair.some((member) => independentlySeen.has(member))) return;
     recoveredPairs.push(pair);
     const splitPairId = `merged-pair-${parentIndex}`;
     pair.forEach((person) => additions.push({
@@ -1304,12 +1329,12 @@ function refineMergedImageCandidates(detector, candidates, width, height) {
       const containsBothCenters = pair.every((member) =>
         centerIsInside(member.bbox, candidate.bbox)
       );
-      const largestPersonArea = Math.max(
-        ...pair.map((member) => boxArea(member.bbox)),
+      const widestPerson = Math.max(
+        ...pair.map((member) => member.bbox[2]),
       );
       return (
         containsBothCenters &&
-        boxArea(candidate.bbox) >= largestPersonArea * 1.2
+        candidate.bbox[2] >= widestPerson * 1.35
       );
     })
   );
@@ -1548,22 +1573,24 @@ async function analyzeImageFile(file) {
         verifiedByPose: false,
         poseScore: null,
       }));
+    const eligible = withPoseEvidence.filter((candidate) => {
+      if (candidate.verifiedByPose || candidate.recoveredFromMergedBox) return true;
+      if (candidate.score >= IMAGE_UNSUPPORTED_SCORE_FLOOR) return true;
+      const scoreFloor = candidate.fromDetailedScan
+        ? IMAGE_DETAIL_SCORE_FLOOR
+        : IMAGE_DETECTOR_SCORE_FLOOR;
+      return candidate.score >= scoreFloor &&
+        hasIndependentImageSupport(candidate, withPoseEvidence);
+    });
+    const complete = eligible.filter((candidate) =>
+      !candidate.clippedByImageTile || candidate.verifiedByPose
+    );
     const detections = suppressImageBodyPartDuplicates(consolidateDetections(
-      withPoseEvidence.filter((candidate) => {
-        if (candidate.verifiedByPose) return true;
-        if (candidate.score >= IMAGE_UNSUPPORTED_SCORE_FLOOR) return true;
-        const independentlySupported = hasIndependentImageSupport(
-          candidate,
-          withPoseEvidence,
-        );
-        return independentlySupported && (
-          candidate.score >= IMAGE_DETECTOR_SCORE_FLOOR ||
-          (
-            candidate.fromDetailedScan &&
-            candidate.score >= IMAGE_DETAIL_SCORE_FLOOR
-          )
-        );
-      }),
+      eligible.filter((candidate) =>
+        !candidate.clippedByImageTile || candidate.verifiedByPose ||
+        !complete.some((other) => matchesCropFragment(candidate, other))
+      ),
+      { uploadedImage: true },
     ));
     const processingMs = performance.now() - startedAt;
     state.imageAnalysisFilename = (file.name.replace(/\.[^.]+$/, "") || "image")
@@ -2590,6 +2617,13 @@ function attachPoseEvidence(
     const matchingIndexes = [...availableDetections].filter((index) => {
       if (index === bestIndex) return true;
       const detection = people[index];
+      if (areOppositeSplitPairMembers(bestDetection, detection)) return false;
+      if (allowRecoverablePoses) {
+        const aligned =
+          matchesCropFragment(detection, bestDetection) ||
+          matchesCropFragment(bestDetection, detection);
+        return aligned && poseMatchQuality(detection, pose) > 0.8;
+      }
       const samePersonGeometry =
         boxesAreDuplicate(bestDetection.bbox, detection.bbox) ||
         looksLikeSamePersonAcrossScales(bestDetection, detection) ||
@@ -2598,7 +2632,12 @@ function attachPoseEvidence(
     });
     matchingIndexes.forEach((index) => {
       const detection = candidates[index];
-      const mergedBox = mergeDetectionWithPoseBox(detection, pose, frame);
+      const poseBox = mergeDetectionWithPoseBox(detection, pose, frame);
+      // A pose can span neighboring people in a crowded photo. Keep an
+      // individual box when a pose would widen it considerably.
+      const mergedBox = allowRecoverablePoses && poseBox[2] > detection.bbox[2] * 1.2
+        ? detection.bbox
+        : poseBox;
       availableDetections.delete(index);
       candidates[index] = {
         ...detection,
@@ -2619,7 +2658,7 @@ function attachPoseEvidence(
   );
 }
 
-function consolidateDetections(detections) {
+function consolidateDetections(detections, { uploadedImage = false } = {}) {
   // Keep smaller individual detections until after duplicate removal. A broad
   // full-frame box can cover several overlapping people, so discarding the
   // boxes inside it turns a crowd into one person.
@@ -2628,6 +2667,14 @@ function consolidateDetections(detections) {
     const firstHasPose = Boolean(first.verifiedByPose || first.poseHits > 0);
     const secondHasPose = Boolean(second.verifiedByPose || second.poseHits > 0);
     if (firstHasPose !== secondHasPose) return secondHasPose ? 1 : -1;
+    if (uploadedImage) {
+      const firstRecovered = Boolean(first.recoveredFromMergedBox);
+      const secondRecovered = Boolean(second.recoveredFromMergedBox);
+      if (firstRecovered !== secondRecovered) return secondRecovered ? 1 : -1;
+      const firstClipped = Boolean(first.clippedByImageTile);
+      const secondClipped = Boolean(second.clippedByImageTile);
+      if (firstClipped !== secondClipped) return firstClipped ? 1 : -1;
+    }
     return second.score - first.score;
   });
   const unique = [];
@@ -2681,14 +2728,28 @@ function consolidateDetections(detections) {
   }
 
   return unique.filter((candidate) => {
+    if (uploadedImage && candidate.recoveredFromMergedBox) return true;
     const candidateArea = boxArea(candidate.bbox);
     const containedPeople = unique.filter((other) => {
       if (other === candidate) return false;
+      if (uploadedImage && (
+        other.clippedByImageTile || other.bbox[3] < candidate.bbox[3] * 0.6
+      )) return false;
       return (
         boxArea(other.bbox) < candidateArea * 0.65 &&
         centerIsInside(other.bbox, candidate.bbox)
       );
     });
+    if (uploadedImage) {
+      // Distant people and body fragments may fall inside a foreground
+      // rectangle. Only peer-sized detections can replace a group box.
+      return !containedPeople.some((first, i) =>
+        containedPeople.slice(i + 1).some((second) =>
+          Math.abs(boxCenter(first.bbox)[0] - boxCenter(second.bbox)[0]) >=
+            candidate.bbox[2] * 0.25
+        )
+      );
+    }
     return containedPeople.length < 2;
   });
 }

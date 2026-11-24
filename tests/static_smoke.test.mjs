@@ -8,7 +8,9 @@ import {
   areOppositeSplitPairMembers,
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
+  matchesCropFragment,
   selectDistinctSplitPair,
+  touchesInteriorCropEdge,
 } from "../src/js/detection_geometry.js";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -147,7 +149,7 @@ assert.match(app, /multiPersonDetections/);
 assert.match(app, /function refineMergedImageCandidates/);
 assert.match(app, /selectDistinctSplitPair/);
 assert.match(app, /recoveredFromMergedBox/);
-assert.match(app, /detection_geometry\.js\?v=20261125-ops7/);
+assert.match(app, /detection_geometry\.js\?v=20261125-ops8/);
 assert.match(app, /function motionAwareTrackMatchScore/);
 assert.match(app, /function canReacquireMovingTrack/);
 assert.match(app, /function isTrackVisible/);
@@ -265,6 +267,33 @@ assert.deepEqual(
   recoveredPair,
   "a broad box with two separated full-height people should split into two",
 );
+assert.deepEqual(
+  selectDistinctSplitPair(
+    { bbox: [638, 555, 108, 267], score: 0.72 },
+    [
+      { bbox: [652, 585, 38, 235], score: 0.54, splitSide: "left" },
+      { bbox: [677, 555, 49, 258], score: 0.86, splitSide: "right" },
+    ],
+  ),
+  [],
+  "the two crop slices of the shopper in blue must count once",
+);
+assert.deepEqual(
+  selectDistinctSplitPair(mergedPairParent, [
+    { bbox: [228, 170, 35, 275], score: 0.59, splitSide: "left" },
+    { bbox: [258, 173, 74, 269], score: 0.63, splitSide: "right" },
+  ]),
+  [],
+  "a narrow sliver beside a wider crop cannot establish a second person",
+);
+
+const photoTile = { x: 0, y: 100, width: 480, height: 220 };
+assert.equal(touchesInteriorCropEdge([80, 0, 50, 120], photoTile, 960, 480), true);
+assert.equal(touchesInteriorCropEdge([80, 100, 50, 119], photoTile, 960, 480), true);
+assert.equal(touchesInteriorCropEdge([0, 30, 50, 120], photoTile, 960, 480), false);
+const wholeShopper = { bbox: [220, 100, 90, 220] };
+assert.equal(matchesCropFragment({ bbox: [238, 205, 57, 105] }, wholeShopper), true);
+assert.equal(matchesCropFragment({ bbox: [280, 128, 70, 125] }, wholeShopper), false);
 assert.deepEqual(
   selectDistinctSplitPair(mergedPairParent, [
     recoveredPair[0],

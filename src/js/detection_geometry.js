@@ -2,6 +2,17 @@ function boxArea(box) {
   return Math.max(0, box[2]) * Math.max(0, box[3]);
 }
 
+export function touchesInteriorCropEdge(box, crop, imageWidth, imageHeight) {
+  const [x, y, width, height] = box;
+  const margin = Math.max(2, Math.min(8, Math.min(width, height) * 0.04));
+  return (
+    (crop.x > 0 && x <= margin) ||
+    (crop.y > 0 && y <= margin) ||
+    (crop.x + crop.width < imageWidth && x + width >= crop.width - margin) ||
+    (crop.y + crop.height < imageHeight && y + height >= crop.height - margin)
+  );
+}
+
 function hasPoseEvidence(detection) {
   return Boolean(detection.verifiedByPose || detection.poseHits > 0);
 }
@@ -32,7 +43,11 @@ export function areOppositeSplitPairMembers(first, second) {
 export function areAlignedBodyPartDetections(first, second) {
   const firstBox = first?.bbox;
   const secondBox = second?.bbox;
-  if (!firstBox || !secondBox || areOppositeSplitPairMembers(first, second)) {
+  if (
+    !firstBox || !secondBox ||
+    areOppositeSplitPairMembers(first, second) ||
+    haveDistinctPoseIdentities(first, second)
+  ) {
     return false;
   }
 
@@ -52,11 +67,6 @@ export function areAlignedBodyPartDetections(first, second) {
     Math.min(firstBox[1] + firstBox[3], secondBox[1] + secondBox[3]) -
       Math.max(firstBox[1], secondBox[1]),
   );
-  const independentlyPosedPeople =
-    first.verifiedByPose &&
-    second.verifiedByPose &&
-    haveDistinctPoseIdentities(first, second);
-  if (independentlyPosedPeople && verticalIntersection === 0) return false;
   const smallerWidth = Math.max(1, Math.min(firstBox[2], secondBox[2]));
   const smallerHeight = Math.max(1, Math.min(firstBox[3], secondBox[3]));
   const horizontalOverlap = horizontalIntersection / smallerWidth;
@@ -117,15 +127,17 @@ function intersectionOverArea(inner, outer) {
   return intersection / Math.max(1, boxArea(inner));
 }
 
+export function isWideEnoughForSplit(box) {
+  return box[2] >= box[3] * 0.5;
+}
+
 /**
  * Select two full-height, horizontally distinct people recovered by rescanning
- * the left and right portions of one broad detector box. Requiring opposite
- * scan sides, strong parent containment, and separated centers avoids turning
- * two partial boxes for one person into a false pair.
+ * the left and right portions of one broad detector box.
  */
 export function selectDistinctSplitPair(parent, detections) {
   const parentBox = parent?.bbox;
-  if (!parentBox || parentBox[2] / Math.max(1, parentBox[3]) < 0.4) return [];
+  if (!parentBox || !isWideEnoughForSplit(parentBox)) return [];
 
   const parentLeft = parentBox[0];
   const parentTop = parentBox[1];
@@ -140,7 +152,7 @@ export function selectDistinctSplitPair(parent, detections) {
     return (
       (detection.splitSide === "left" || detection.splitSide === "right") &&
       intersectionOverArea(box, parentBox) >= 0.72 &&
-      box[3] >= parentHeight * 0.5 &&
+      box[3] >= parentHeight * 0.72 &&
       box[2] <= parentWidth * 0.76 &&
       box[3] / Math.max(1, box[2]) >= 0.9 &&
       centerX >= parentLeft - parentWidth * 0.04 &&
@@ -172,10 +184,12 @@ export function selectDistinctSplitPair(parent, detections) {
         1,
         Math.min(left.bbox[2], right.bbox[2]),
       );
+      const largerWidth = Math.max(left.bbox[2], right.bbox[2]);
       // Two crops can return the same person with slightly shifted boxes.
       // Real side-by-side people have distinct horizontal centers and do not
       // overlap most of the narrower box.
       if (
+        smallerWidth < largerWidth * 0.6 ||
         separation < smallerWidth * 0.65 ||
         horizontalIntersection / smallerWidth > 0.48
       ) continue;
@@ -206,6 +220,18 @@ export function selectDistinctSplitPair(parent, detections) {
   }
 
   return bestPair;
+}
+
+export function matchesCropFragment(fragment, complete) {
+  const part = fragment.bbox;
+  const whole = complete.bbox;
+  const horizontalOffset = Math.abs(part[0] + part[2] / 2 - whole[0] - whole[2] / 2);
+  return (
+    part[3] <= whole[3] * 1.12 &&
+    part[2] <= whole[2] * 1.12 &&
+    horizontalOffset <= whole[2] * 0.36 &&
+    intersectionOverArea(part, whole) >= 0.68
+  );
 }
 
 /**
