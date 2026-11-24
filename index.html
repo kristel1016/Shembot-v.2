@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f3f6ff" />
     <meta name="description" content="Private, on-device people counting from your phone or laptop camera." />
     <title>Shembot Vision Console</title>
-    <link rel="stylesheet" href="./assets/css/styles.css?v=20261124-precision1" />
+    <link rel="stylesheet" href="./assets/css/styles.css?v=20261124-image1" />
     <script>
       /* Universal range-progress tracker for custom slider fill */
       function syncRangeProgress(el) {
@@ -34,7 +34,7 @@
       });
       window.addEventListener('resize', syncWorkspaceScale, { passive: true });
     </script>
-    <script defer src="./src/js/boot.js?v=20261124-precision1"></script>
+    <script defer src="./src/js/boot.js?v=20261124-image1"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -168,6 +168,14 @@
                 <button class="secondary-button" id="setAreaButton" disabled>Set area</button>
                 <button class="secondary-button" id="clearAreaButton" disabled>Full frame</button>
               </div>
+            </div>
+
+            <div class="control-row" data-control-item data-search="image photo upload analyze count people">
+              <span class="row-icon row-icon-green" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4V4Zm2 2v9.2l3.4-3.4 2.6 2.6 2.8-3.4 3.2 3.9V6H6Zm3 4a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" /></svg>
+              </span>
+              <span class="row-copy"><strong>Analyze an image</strong><small>Upload a photo and count people</small></span>
+              <button class="row-button" type="button" id="openImageAnalysisButton" disabled>Upload</button>
             </div>
           </section>
 
@@ -328,5 +336,54 @@
         </div>
       </aside>
     </main>
+
+    <dialog class="image-analysis-dialog" id="imageAnalysisDialog" aria-labelledby="imageAnalysisTitle">
+      <div class="image-dialog-card">
+        <header class="image-dialog-header">
+          <div>
+            <span class="eyebrow">ON-DEVICE IMAGE ANALYSIS</span>
+            <h2 id="imageAnalysisTitle">Count people in a photo</h2>
+            <p>Upload an image to receive an annotated result and count.</p>
+          </div>
+          <button class="dialog-close-button" id="closeImageAnalysisButton" type="button" aria-label="Close image analysis">&#10005;</button>
+        </header>
+
+        <div class="image-dialog-body">
+          <input id="imageFileInput" type="file" accept="image/jpeg,image/png,image/webp" hidden />
+          <div class="image-upload-panel" id="imageUploadPanel">
+            <span class="image-upload-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 3 7 8h3v6h4V8h3l-5-5ZM5 16h14v3H5v-3Z" /></svg>
+            </span>
+            <strong>Choose a classroom or crowd photo</strong>
+            <p>JPG, PNG, or WebP. The image stays on this device.</p>
+            <button class="primary-button image-choose-button" id="chooseImageButton" type="button">Choose image</button>
+          </div>
+
+          <div class="image-analysis-progress" id="imageAnalysisProgress" role="status" hidden>
+            <span class="spinner"></span>
+            <strong>Analyzing people in the image...</strong>
+            <small>Running full-image and zoomed scans.</small>
+          </div>
+
+          <p class="image-analysis-error" id="imageAnalysisError" role="alert" hidden></p>
+
+          <section class="image-analysis-result" id="imageAnalysisResult" hidden aria-label="Image detection result">
+            <div class="image-result-canvas-wrap">
+              <canvas class="image-result-canvas" id="imageResultCanvas" width="960" height="540" aria-label="Annotated uploaded image"></canvas>
+            </div>
+            <div class="image-result-summary">
+              <span><small>People detected</small><strong id="imagePeopleCount">0</strong></span>
+              <span><small>Room status</small><strong id="imageCapacityStatus" data-status="safe">SAFE</strong></span>
+              <span><small>Processing</small><strong id="imageProcessingTime">0 ms</strong></span>
+            </div>
+            <p class="image-detection-details" id="imageDetectionDetails">No detections yet.</p>
+            <div class="image-result-actions">
+              <button class="secondary-button" id="chooseAnotherImageButton" type="button">Choose another image</button>
+              <button class="primary-button" id="downloadImageResultButton" type="button">Download result</button>
+            </div>
+          </section>
+        </div>
+      </div>
+    </dialog>
   </body>
 </html>

@@ -57,6 +57,22 @@ const elements = {
   sidebarFlipButton: document.querySelector("#sidebarFlipButton"),
   setAreaButton: document.querySelector("#setAreaButton"),
   clearAreaButton: document.querySelector("#clearAreaButton"),
+  openImageAnalysisButton: document.querySelector("#openImageAnalysisButton"),
+  imageAnalysisDialog: document.querySelector("#imageAnalysisDialog"),
+  closeImageAnalysisButton: document.querySelector("#closeImageAnalysisButton"),
+  imageFileInput: document.querySelector("#imageFileInput"),
+  chooseImageButton: document.querySelector("#chooseImageButton"),
+  chooseAnotherImageButton: document.querySelector("#chooseAnotherImageButton"),
+  downloadImageResultButton: document.querySelector("#downloadImageResultButton"),
+  imageUploadPanel: document.querySelector("#imageUploadPanel"),
+  imageAnalysisProgress: document.querySelector("#imageAnalysisProgress"),
+  imageAnalysisError: document.querySelector("#imageAnalysisError"),
+  imageAnalysisResult: document.querySelector("#imageAnalysisResult"),
+  imageResultCanvas: document.querySelector("#imageResultCanvas"),
+  imagePeopleCount: document.querySelector("#imagePeopleCount"),
+  imageCapacityStatus: document.querySelector("#imageCapacityStatus"),
+  imageProcessingTime: document.querySelector("#imageProcessingTime"),
+  imageDetectionDetails: document.querySelector("#imageDetectionDetails"),
   areaStatus: document.querySelector("#areaStatus"),
   zoneSelection: document.querySelector("#zoneSelection"),
   zoneDraft: document.querySelector("#zoneDraft"),
@@ -119,6 +135,10 @@ const qualityContext = qualityCanvas.getContext("2d", {
 });
 const recordingCanvas = document.createElement("canvas");
 const recordingContext = recordingCanvas.getContext("2d", { alpha: false });
+const imageSourceCanvas = document.createElement("canvas");
+const imageSourceContext = imageSourceCanvas.getContext("2d", { alpha: false });
+const imageScanCanvas = document.createElement("canvas");
+const imageScanContext = imageScanCanvas.getContext("2d", { alpha: false });
 
 function loadSavedArea() {
   try {
@@ -195,6 +215,9 @@ function createEmptySession() {
 
 const state = {
   detector: null,
+  imageDetector: null,
+  imageDetectorPromise: null,
+  imageAnalysisFilename: "shembot-image-result",
   vision: null,
   detectorModelName: "custom",
   detectorRecoveryPromise: null,
@@ -980,6 +1003,313 @@ function downloadSessionReport() {
     new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }),
     `shembot-session-${fileTimestamp}.csv`,
   );
+}
+
+function setImageAnalysisView(view) {
+  elements.imageUploadPanel.hidden = view !== "upload";
+  elements.imageAnalysisProgress.hidden = view !== "progress";
+  elements.imageAnalysisResult.hidden = view !== "result";
+}
+
+function showImageAnalysisError(message) {
+  elements.imageAnalysisError.textContent = message;
+  elements.imageAnalysisError.hidden = false;
+  setImageAnalysisView("upload");
+}
+
+function clearImageAnalysisError() {
+  elements.imageAnalysisError.textContent = "";
+  elements.imageAnalysisError.hidden = true;
+}
+
+function openImageAnalysis() {
+  clearImageAnalysisError();
+  if (!elements.imageAnalysisDialog.open) {
+    elements.imageAnalysisDialog.showModal();
+  }
+}
+
+function chooseImageFile() {
+  elements.imageFileInput.value = "";
+  elements.imageFileInput.click();
+}
+
+async function decodeImageFile(file) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      return await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch {
+      return createImageBitmap(file);
+    }
+  }
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image();
+    image.decoding = "async";
+    await new Promise((resolve, reject) => {
+      image.addEventListener("load", resolve, { once: true });
+      image.addEventListener("error", () => reject(new Error("The image could not be decoded.")), { once: true });
+      image.src = url;
+    });
+    return image;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function imageScanAreas(width, height) {
+  const tileFraction = 0.64;
+  const tileWidth = Math.max(1, Math.round(width * tileFraction));
+  const tileHeight = Math.max(1, Math.round(height * tileFraction));
+  const right = Math.max(0, width - tileWidth);
+  const bottom = Math.max(0, height - tileHeight);
+  return [
+    { x: 0, y: 0, width, height, kind: "full" },
+    { x: 0, y: 0, width: tileWidth, height: tileHeight, kind: "tile" },
+    { x: right, y: 0, width: tileWidth, height: tileHeight, kind: "tile" },
+    { x: 0, y: bottom, width: tileWidth, height: tileHeight, kind: "tile" },
+    { x: right, y: bottom, width: tileWidth, height: tileHeight, kind: "tile" },
+  ];
+}
+
+async function getImageDetector() {
+  if (state.imageDetector) return state.imageDetector;
+  if (state.imageDetectorPromise) return state.imageDetectorPromise;
+  if (!state.vision) throw new Error("The person detector is still loading.");
+
+  state.imageDetectorPromise = (async () => {
+    const preferredModel = state.detectorModelName === "generic"
+      ? FALLBACK_MODEL_PATH
+      : MODEL_PATH;
+    try {
+      return await createImageDetector(state.vision, "CPU", preferredModel);
+    } catch (preferredError) {
+      if (preferredModel === FALLBACK_MODEL_PATH) throw preferredError;
+      console.warn("Optimized image detector unavailable; using compatible model.", preferredError);
+      return createImageDetector(state.vision, "CPU", FALLBACK_MODEL_PATH);
+    }
+  })();
+
+  try {
+    state.imageDetector = await state.imageDetectorPromise;
+    return state.imageDetector;
+  } finally {
+    state.imageDetectorPromise = null;
+  }
+}
+
+function imageFrame(width, height) {
+  return {
+    sourceWidth: width,
+    sourceHeight: height,
+    crop: { x: 0, y: 0, width, height },
+    rotatedWidth: width,
+    rotatedHeight: height,
+    width,
+    height,
+    rotation: 0,
+  };
+}
+
+function renderAnalyzedImage(detections, processingMs) {
+  const width = imageSourceCanvas.width;
+  const height = imageSourceCanvas.height;
+  const canvas = elements.imageResultCanvas;
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.drawImage(imageSourceCanvas, 0, 0);
+  const styles = getComputedStyle(document.documentElement);
+  const accent = styles.getPropertyValue("--accent").trim() || "#5b7fd4";
+  const status = getCapacityStatus(
+    detections.length,
+    Number(elements.capacityInput.value),
+  );
+  const statusLabel = status === "over"
+    ? "OVER CAPACITY"
+    : status === "near"
+      ? "NEAR CAPACITY"
+      : "SAFE";
+  const lineWidth = Math.max(3, Math.round(Math.min(width, height) / 260));
+  const fontSize = Math.max(16, Math.round(Math.min(width, height) / 30));
+  context.lineWidth = lineWidth;
+  context.font = `800 ${fontSize}px Inter, system-ui, sans-serif`;
+  context.textBaseline = "top";
+
+  detections.forEach((detection, index) => {
+    const [x, y, boxWidth, boxHeight] = detection.bbox;
+    const label = `P${index + 1} ${Math.round(detection.score * 100)}%`;
+    context.strokeStyle = accent;
+    context.strokeRect(x, y, boxWidth, boxHeight);
+    const textWidth = context.measureText(label).width;
+    const labelHeight = fontSize + 10;
+    const labelY = Math.max(0, y - labelHeight);
+    context.fillStyle = accent;
+    context.fillRect(x, labelY, textWidth + 14, labelHeight);
+    context.fillStyle = "#07111f";
+    context.fillText(label, x + 7, labelY + 4);
+  });
+
+  const bannerHeight = Math.max(50, Math.round(height * 0.075));
+  const bannerFont = Math.max(18, Math.round(bannerHeight * 0.42));
+  context.fillStyle = "rgba(13, 18, 28, 0.86)";
+  context.fillRect(0, 0, width, bannerHeight);
+  context.font = `800 ${bannerFont}px Inter, system-ui, sans-serif`;
+  context.textBaseline = "middle";
+  context.textAlign = "left";
+  context.fillStyle = "#ffffff";
+  context.fillText(
+    `People detected: ${detections.length}`,
+    Math.max(14, width * 0.018),
+    bannerHeight / 2,
+  );
+  context.textAlign = "right";
+  context.fillStyle = status === "over"
+    ? "#ff7187"
+    : status === "near"
+      ? "#ffd166"
+      : "#64d693";
+  context.fillText(
+    statusLabel,
+    width - Math.max(14, width * 0.018),
+    bannerHeight / 2,
+  );
+
+  elements.imagePeopleCount.textContent = String(detections.length);
+  elements.imageCapacityStatus.textContent = statusLabel;
+  elements.imageCapacityStatus.dataset.status = status;
+  elements.imageProcessingTime.textContent = `${Math.round(processingMs)} ms`;
+  elements.imageDetectionDetails.textContent = detections.length
+    ? `${detections.map((detection, index) =>
+      `P${index + 1}: ${Math.round(detection.score * 100)}% confidence`
+    ).join(" • ")}. Confidence is not system accuracy.`
+    : "No people passed the high-precision threshold in this image.";
+}
+
+async function analyzeImageFile(file) {
+  clearImageAnalysisError();
+  if (!file || !["image/jpeg", "image/png", "image/webp"].includes(file.type)) {
+    showImageAnalysisError("Choose a JPG, PNG, or WebP image.");
+    return;
+  }
+  if (file.size > 20 * 1024 * 1024) {
+    showImageAnalysisError("Choose an image smaller than 20 MB.");
+    return;
+  }
+
+  setImageAnalysisView("progress");
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+  let image;
+  try {
+    image = await decodeImageFile(file);
+    const sourceWidth = image.width || image.naturalWidth;
+    const sourceHeight = image.height || image.naturalHeight;
+    if (!sourceWidth || !sourceHeight) throw new Error("The selected image is empty.");
+    const scale = Math.min(1, 1600 / Math.max(sourceWidth, sourceHeight));
+    const width = Math.max(1, Math.round(sourceWidth * scale));
+    const height = Math.max(1, Math.round(sourceHeight * scale));
+    imageSourceCanvas.width = width;
+    imageSourceCanvas.height = height;
+    imageSourceContext.fillStyle = "#111722";
+    imageSourceContext.fillRect(0, 0, width, height);
+    imageSourceContext.drawImage(image, 0, 0, width, height);
+    image.close?.();
+    image = null;
+
+    const detector = await getImageDetector();
+    const startedAt = performance.now();
+    const candidates = [];
+    for (const area of imageScanAreas(width, height)) {
+      imageScanCanvas.width = area.width;
+      imageScanCanvas.height = area.height;
+      imageScanContext.drawImage(
+        imageSourceCanvas,
+        area.x,
+        area.y,
+        area.width,
+        area.height,
+        0,
+        0,
+        area.width,
+        area.height,
+      );
+      const frame = imageFrame(area.width, area.height);
+      const result = detector.detect(imageScanCanvas);
+      for (const detection of result.detections || []) {
+        if (!isPlausiblePerson(detection, frame, POSE_ASSISTED_SCORE_FLOOR)) continue;
+        const category = getCategory(detection);
+        const box = detection.boundingBox;
+        candidates.push({
+          bbox: [
+            area.x + box.originX,
+            area.y + box.originY,
+            box.width,
+            box.height,
+          ],
+          score: category.score,
+          fromFullScan: area.kind === "full",
+          relativeScanArea: (box.width * box.height) / Math.max(1, width * height),
+          edgeCropped: false,
+        });
+      }
+    }
+
+    const fullFrame = imageFrame(width, height);
+    let poseDetections = [];
+    if (state.poseLandmarker) {
+      try {
+        const poseResult = state.poseLandmarker.detect(imageSourceCanvas);
+        poseDetections = poseResultToDetections(
+          poseResult,
+          fullFrame,
+          { kind: "full" },
+        );
+      } catch (poseError) {
+        console.warn("Pose assistance was skipped for the uploaded image.", poseError);
+      }
+    }
+    const withPoseEvidence = state.poseLandmarker
+      ? attachPoseEvidence(candidates, poseDetections, fullFrame)
+      : candidates.map((candidate) => ({
+        ...candidate,
+        verifiedByPose: false,
+        poseScore: null,
+      }));
+    const detections = consolidateDetections(
+      withPoseEvidence.filter((candidate) =>
+        candidate.verifiedByPose || candidate.score >= DETECTOR_ONLY_SCORE_FLOOR
+      ),
+    );
+    const processingMs = performance.now() - startedAt;
+    state.imageAnalysisFilename = (file.name.replace(/\.[^.]+$/, "") || "image")
+      .replace(/[^a-z0-9_-]+/gi, "-")
+      .replace(/^-+|-+$/g, "") || "image";
+    renderAnalyzedImage(detections, processingMs);
+    recordHistory("image-analysis", {
+      count: detections.length,
+      imageName: file.name,
+      processingMs: Math.round(processingMs),
+      status: getCapacityStatus(detections.length, Number(elements.capacityInput.value)),
+    });
+    setImageAnalysisView("result");
+  } catch (error) {
+    console.error("Image analysis failed", error);
+    showImageAnalysisError(
+      `The image could not be analyzed: ${error?.message || "unexpected detector error"}`,
+    );
+  } finally {
+    image?.close?.();
+  }
+}
+
+function downloadAnalyzedImage() {
+  elements.imageResultCanvas.toBlob((blob) => {
+    if (!blob) {
+      showImageAnalysisError("The annotated result could not be created.");
+      return;
+    }
+    downloadBlob(blob, `${state.imageAnalysisFilename}-shembot-result.png`);
+  }, "image/png");
 }
 
 function saveFeedback(isCorrect) {
@@ -2532,6 +2862,22 @@ elements.startButton.addEventListener("click", () => {
   if (state.running) stopCamera();
   else startCamera();
 });
+elements.openImageAnalysisButton.addEventListener("click", openImageAnalysis);
+elements.closeImageAnalysisButton.addEventListener("click", () => {
+  elements.imageAnalysisDialog.close();
+});
+elements.chooseImageButton.addEventListener("click", chooseImageFile);
+elements.chooseAnotherImageButton.addEventListener("click", chooseImageFile);
+elements.downloadImageResultButton.addEventListener("click", downloadAnalyzedImage);
+elements.imageFileInput.addEventListener("change", () => {
+  const [file] = elements.imageFileInput.files || [];
+  if (file) void analyzeImageFile(file);
+});
+elements.imageAnalysisDialog.addEventListener("click", (event) => {
+  if (event.target === elements.imageAnalysisDialog) {
+    elements.imageAnalysisDialog.close();
+  }
+});
 elements.recordButton.addEventListener("click", () => {
   if (state.recording) stopRecording();
   else startRecording();
@@ -2714,6 +3060,23 @@ async function createDetector(vision, delegate, modelAssetPath = MODEL_PATH) {
   });
 }
 
+async function createImageDetector(
+  vision,
+  delegate,
+  modelAssetPath = MODEL_PATH,
+) {
+  return ObjectDetector.createFromOptions(vision, {
+    baseOptions: {
+      modelAssetPath,
+      delegate,
+    },
+    runningMode: "IMAGE",
+    scoreThreshold: POSE_ASSISTED_SCORE_FLOOR,
+    maxResults: 50,
+    categoryAllowlist: ["person"],
+  });
+}
+
 async function createPoseLandmarker(vision, delegate) {
   return PoseLandmarker.createFromOptions(vision, {
     baseOptions: {
@@ -2756,6 +3119,7 @@ async function loadModel() {
     if (!state.poseLandmarker) {
       elements.modelLoading.hidden = true;
       elements.startButton.disabled = false;
+      elements.openImageAnalysisButton.disabled = false;
       elements.poseStatusTag.textContent = "TRACK";
       elements.modelStatus.textContent = "Detector ready; pose assist unavailable";
       updateAppStatus("Ready (tracking only)", "ready");
@@ -2768,6 +3132,7 @@ async function loadModel() {
     elements.poseStatusTag.textContent = "ASSIST";
     elements.modelLoading.hidden = true;
     elements.startButton.disabled = false;
+    elements.openImageAnalysisButton.disabled = false;
     updateAppStatus("Ready", "ready");
   } catch (error) {
     console.error(error);

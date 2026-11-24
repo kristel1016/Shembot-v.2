@@ -1783,6 +1783,232 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   background: var(--accent-tint);
 }
 
+/* Uploaded image analysis */
+
+.image-analysis-dialog {
+  width: min(1040px, calc(100vw - 32px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  padding: 0;
+  border: 0;
+  border-radius: 22px;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 26px 80px rgba(22, 35, 64, 0.28);
+  overflow: hidden;
+}
+
+.image-analysis-dialog::backdrop {
+  background: rgba(20, 29, 48, 0.62);
+  backdrop-filter: blur(5px);
+}
+
+.image-dialog-card {
+  display: grid;
+  max-height: calc(100dvh - 32px);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.image-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.image-dialog-header > div {
+  display: grid;
+  gap: 5px;
+}
+
+.image-dialog-header .eyebrow {
+  margin: 0;
+  color: var(--accent);
+}
+
+.image-dialog-header h2 {
+  color: var(--ink);
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.image-dialog-header p {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.dialog-close-button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--border-medium);
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--inner);
+  cursor: pointer;
+}
+
+.dialog-close-button:hover {
+  color: var(--ink);
+  background: var(--accent-tint);
+}
+
+.image-dialog-body {
+  min-height: 360px;
+  padding: 20px 24px 24px;
+  overflow-y: auto;
+}
+
+.image-upload-panel,
+.image-analysis-progress {
+  display: grid;
+  min-height: 330px;
+  align-content: center;
+  justify-items: center;
+  gap: 10px;
+  padding: 32px;
+  border: 2px dashed rgba(91, 127, 212, 0.25);
+  border-radius: 16px;
+  background: var(--inner);
+  text-align: center;
+}
+
+.image-upload-panel strong,
+.image-analysis-progress strong {
+  font-size: 1rem;
+}
+
+.image-upload-panel p,
+.image-analysis-progress small {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.image-upload-icon {
+  display: grid;
+  width: 62px;
+  height: 62px;
+  margin-bottom: 4px;
+  place-items: center;
+  border-radius: 18px;
+  color: var(--accent);
+  background: var(--accent-tint);
+}
+
+.image-upload-icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.image-choose-button {
+  margin-top: 8px;
+}
+
+.image-analysis-progress .spinner {
+  position: static;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 4px;
+}
+
+.image-analysis-error {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid rgba(224, 82, 104, 0.24);
+  border-radius: 10px;
+  color: var(--danger);
+  background: var(--danger-bg);
+  font-size: 0.88rem;
+}
+
+.image-analysis-result {
+  display: grid;
+  gap: 14px;
+}
+
+.image-result-canvas-wrap {
+  display: grid;
+  min-height: 260px;
+  max-height: 58vh;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #111722;
+}
+
+.image-result-canvas {
+  position: static;
+  inset: auto;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 58vh;
+  object-fit: contain;
+}
+
+.image-result-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.image-result-summary > span {
+  display: grid;
+  gap: 5px;
+  padding: 13px 15px;
+  border-radius: 11px;
+  background: var(--inner);
+}
+
+.image-result-summary small {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.image-result-summary strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 1rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#imagePeopleCount {
+  color: var(--accent);
+  font-size: 1.45rem;
+}
+
+#imageCapacityStatus[data-status="safe"] { color: var(--success); }
+#imageCapacityStatus[data-status="near"] { color: var(--warning); }
+#imageCapacityStatus[data-status="over"] { color: var(--danger); }
+
+.image-detection-details {
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.image-result-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+}
+
+.image-result-actions .primary-button,
+.image-result-actions .secondary-button {
+  width: auto;
+  min-width: 160px;
+}
+
 /* ═══════════════════════════════════════
    RESPONSIVE BREAKPOINTS
    ═══════════════════════════════════════ */
@@ -1950,6 +2176,42 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
   .empty-state p {
     display: none;
+  }
+
+  .image-analysis-dialog {
+    width: 100vw;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .image-dialog-card {
+    max-height: 100dvh;
+  }
+
+  .image-dialog-header,
+  .image-dialog-body {
+    padding: 16px;
+  }
+
+  .image-upload-panel,
+  .image-analysis-progress {
+    min-height: 300px;
+    padding: 22px;
+  }
+
+  .image-result-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .image-result-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .image-result-actions .primary-button,
+  .image-result-actions .secondary-button {
+    width: 100%;
+    min-width: 0;
   }
 }
 

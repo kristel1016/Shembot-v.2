@@ -149,6 +149,7 @@ optional shortcut for the JavaScript smoke test.
 - safe, near-capacity, and overcapacity status with an optional sound alert
 - live occupancy graph, session summary, and downloadable session CSV report
 - downloadable annotated camera recording with count, status, and local timestamp
+- uploaded-image analysis with person count, confidence boxes, and downloadable annotated output
 - front/rear camera switching and mirrored preview correction
 - lighting and clarity guidance
 - entry/exit line counter and local CSV history

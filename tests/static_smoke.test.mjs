@@ -37,6 +37,12 @@ for (const id of [
   "recordingIndicator",
   "recordingElapsed",
   "flipButton",
+  "openImageAnalysisButton",
+  "imageAnalysisDialog",
+  "imageFileInput",
+  "imageResultCanvas",
+  "imagePeopleCount",
+  "downloadImageResultButton",
   "countValue",
   "capacityMetric",
   "capacityStatus",
@@ -100,6 +106,12 @@ assert.match(app, /recordingCanvas\.captureStream\(20\)/);
 assert.match(app, /formatRecordingTimestamp/);
 assert.match(app, /video-recording-start/);
 assert.match(app, /video-recording-end/);
+assert.match(app, /function analyzeImageFile/);
+assert.match(app, /function renderAnalyzedImage/);
+assert.match(app, /function downloadAnalyzedImage/);
+assert.match(app, /runningMode:\s*"IMAGE"/);
+assert.match(app, /imageScanAreas/);
+assert.match(app, /image\/jpeg.*image\/png.*image\/webp/s);
 
 const screenshotUpperBody = {
   bbox: [598, 127, 455, 425],
