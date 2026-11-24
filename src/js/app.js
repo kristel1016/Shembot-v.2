@@ -9,7 +9,7 @@ import {
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
   selectDistinctSplitPair,
-} from "./detection_geometry.js?v=20261124-ops6";
+} from "./detection_geometry.js?v=20261125-ops7";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -1224,6 +1224,7 @@ function mergedPairScanParents(candidates, width, height) {
 
 function refineMergedImageCandidates(detector, candidates, width, height) {
   const additions = [];
+  const recoveredPairs = [];
   const parents = mergedPairScanParents(candidates, width, height);
 
   parents.forEach((parent, parentIndex) => {
@@ -1236,29 +1237,35 @@ function refineMergedImageCandidates(detector, candidates, width, height) {
     const cropBottom = clamp(parentY + parentHeight + paddingY, 0, height);
     const cropWidth = Math.max(1, cropRight - cropLeft);
     const cropHeight = Math.max(1, cropBottom - cropTop);
-    const halfScanWidth = Math.max(1, Math.round(cropWidth * 0.62));
     const outputHeight = Math.max(1, Math.round(cropHeight));
-    const scans = [
-      { side: "left", x: cropLeft },
-      { side: "right", x: cropRight - halfScanWidth },
-    ];
+    // The wider pass preserves context. The strict half-width pass prevents
+    // two touching people from being presented to the model as one person.
+    // Keeping both passes is important: a strict crop can cut an arm, while a
+    // wide crop alone can repeatedly return the original merged pair.
+    const scans = [0.62, 0.5].flatMap((widthFraction) => {
+      const scanWidth = Math.max(1, Math.round(cropWidth * widthFraction));
+      return [
+        { side: "left", x: cropLeft, width: scanWidth },
+        { side: "right", x: cropRight - scanWidth, width: scanWidth },
+      ];
+    });
     const recovered = [];
 
     scans.forEach((scan) => {
-      imageScanCanvas.width = halfScanWidth;
+      imageScanCanvas.width = scan.width;
       imageScanCanvas.height = outputHeight;
       imageScanContext.drawImage(
         imageSourceCanvas,
         scan.x,
         cropTop,
-        halfScanWidth,
+        scan.width,
         cropHeight,
         0,
         0,
-        halfScanWidth,
+        scan.width,
         outputHeight,
       );
-      const scanFrame = imageFrame(halfScanWidth, outputHeight);
+      const scanFrame = imageFrame(scan.width, outputHeight);
       const result = detector.detect(imageScanCanvas);
       for (const detection of result.detections || []) {
         if (!isPlausiblePerson(detection, scanFrame, 0.20)) continue;
@@ -1279,6 +1286,7 @@ function refineMergedImageCandidates(detector, candidates, width, height) {
 
     const pair = selectDistinctSplitPair(parent, recovered);
     if (pair.length !== 2) return;
+    recoveredPairs.push(pair);
     const splitPairId = `merged-pair-${parentIndex}`;
     pair.forEach((person) => additions.push({
       ...person,
@@ -1291,7 +1299,21 @@ function refineMergedImageCandidates(detector, candidates, width, height) {
     }));
   });
 
-  return [...candidates, ...additions];
+  const unmergedCandidates = candidates.filter((candidate) =>
+    !recoveredPairs.some((pair) => {
+      const containsBothCenters = pair.every((member) =>
+        centerIsInside(member.bbox, candidate.bbox)
+      );
+      const largestPersonArea = Math.max(
+        ...pair.map((member) => boxArea(member.bbox)),
+      );
+      return (
+        containsBothCenters &&
+        boxArea(candidate.bbox) >= largestPersonArea * 1.2
+      );
+    })
+  );
+  return [...unmergedCandidates, ...additions];
 }
 
 async function getImageDetector() {
@@ -2505,7 +2527,33 @@ function attachPoseEvidence(
       .filter((index) => !multiPersonDetections.has(index)),
   );
 
+  const splitPairGroups = new Map();
+  people.forEach((person) => {
+    if (typeof person.splitPairId !== "string") return;
+    const group = splitPairGroups.get(person.splitPairId) || [];
+    group.push(person);
+    splitPairGroups.set(person.splitPairId, group);
+  });
+  const recoveredSplitPairs = [...splitPairGroups.values()].filter((group) =>
+    group.some((person) => person.splitSide === "left") &&
+    group.some((person) => person.splitSide === "right")
+  );
+
   for (const pose of uniquePoses) {
+    const poseSpansRecoveredPair = recoveredSplitPairs.some((pair) => {
+      const containsBothCenters = pair.every((person) =>
+        centerIsInside(person.bbox, pose.bbox)
+      );
+      const largestPersonArea = Math.max(
+        ...pair.map((person) => boxArea(person.bbox)),
+      );
+      return (
+        containsBothCenters &&
+        boxArea(pose.bbox) >= largestPersonArea * 1.45
+      );
+    });
+    if (poseSpansRecoveredPair) continue;
+
     let bestIndex = -1;
     let bestQuality = 0.8;
     for (const index of availableDetections) {

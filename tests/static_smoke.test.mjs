@@ -147,7 +147,7 @@ assert.match(app, /multiPersonDetections/);
 assert.match(app, /function refineMergedImageCandidates/);
 assert.match(app, /selectDistinctSplitPair/);
 assert.match(app, /recoveredFromMergedBox/);
-assert.match(app, /detection_geometry\.js\?v=20261124-ops6/);
+assert.match(app, /detection_geometry\.js\?v=20261125-ops7/);
 assert.match(app, /function motionAwareTrackMatchScore/);
 assert.match(app, /function canReacquireMovingTrack/);
 assert.match(app, /function isTrackVisible/);
@@ -171,6 +171,7 @@ assert.match(app, /function mergeDetectionWithPoseBox/);
 assert.match(app, /allowRecoverablePoses:\s*true/);
 assert.match(app, /recoverableImagePose/);
 assert.match(app, /const samePoseIdentity/);
+assert.match(app, /const poseSpansRecoveredPair/);
 assert.match(app, /detections\.length >= 8/);
 assert.doesNotMatch(app, /applyImageCorrection|manualCorrection|imageCorrectionMode/);
 assert.match(app, /strongStandalonePose/);
@@ -271,6 +272,22 @@ assert.deepEqual(
   ]),
   [],
   "two scans of the same centered person must not create a false pair",
+);
+assert.deepEqual(
+  selectDistinctSplitPair(mergedPairParent, [
+    { bbox: [206, 166, 92, 286], score: 0.71, splitSide: "left" },
+    { bbox: [250, 170, 82, 282], score: 0.67, splitSide: "right" },
+  ]),
+  [],
+  "two heavily overlapping crop results must remain one person",
+);
+assert.deepEqual(
+  selectDistinctSplitPair(mergedPairParent, [
+    { bbox: [206, 255, 62, 160], score: 0.71, splitSide: "left" },
+    { bbox: [292, 170, 80, 282], score: 0.67, splitSide: "right" },
+  ]),
+  [],
+  "a lower-body fragment and a full person must not become a pair",
 );
 assert.equal(
   areOppositeSplitPairMembers(

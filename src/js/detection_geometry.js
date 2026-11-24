@@ -161,6 +161,25 @@ export function selectDistinctSplitPair(parent, detections) {
       const separation = rightCenterX - leftCenterX;
       if (separation < parentWidth * 0.22) continue;
 
+      const horizontalIntersection = Math.max(
+        0,
+        Math.min(
+          left.bbox[0] + left.bbox[2],
+          right.bbox[0] + right.bbox[2],
+        ) - Math.max(left.bbox[0], right.bbox[0]),
+      );
+      const smallerWidth = Math.max(
+        1,
+        Math.min(left.bbox[2], right.bbox[2]),
+      );
+      // Two crops can return the same person with slightly shifted boxes.
+      // Real side-by-side people have distinct horizontal centers and do not
+      // overlap most of the narrower box.
+      if (
+        separation < smallerWidth * 0.65 ||
+        horizontalIntersection / smallerWidth > 0.48
+      ) continue;
+
       const top = Math.max(left.bbox[1], right.bbox[1]);
       const bottom = Math.min(
         left.bbox[1] + left.bbox[3],
@@ -169,6 +188,14 @@ export function selectDistinctSplitPair(parent, detections) {
       const verticalOverlap = Math.max(0, bottom - top) /
         Math.max(1, Math.min(left.bbox[3], right.bbox[3]));
       if (verticalOverlap < 0.48) continue;
+      const smallerHeight = Math.max(
+        1,
+        Math.min(left.bbox[3], right.bbox[3]),
+      );
+      const heightRatio = Math.max(left.bbox[3], right.bbox[3]) /
+        smallerHeight;
+      const topDifference = Math.abs(left.bbox[1] - right.bbox[1]);
+      if (heightRatio > 1.55 || topDifference > smallerHeight * 0.35) continue;
 
       const score = left.score + right.score + separation / parentWidth;
       if (score > bestScore) {
