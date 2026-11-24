@@ -8,7 +8,7 @@ import {
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
   selectDistinctSplitPair,
-} from "./detection_geometry.js?v=20261124-ops3";
+} from "./detection_geometry.js?v=20261124-ops4";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -27,13 +27,13 @@ const POSE_MODEL_PATH = new URL(
   import.meta.url,
 ).href;
 const MAX_INFERENCE_DIMENSION = 768;
-const TRACK_HOLD_MS = 2400;
+const TRACK_HOLD_MS = 3200;
 const DISPLAY_TRACK_HOLD_MS = 850;
-const STABLE_DISPLAY_TRACK_HOLD_MS = 2200;
+const STABLE_DISPLAY_TRACK_HOLD_MS = 2800;
 const RECALIBRATE_AFTER_MS = 30000;
-const MAX_CONFIRMED_MISSED_CYCLES = 14;
+const MAX_CONFIRMED_MISSED_CYCLES = 28;
 const MAX_VISIBLE_MISSED_CYCLES = 1;
-const STABLE_MAX_VISIBLE_MISSED_CYCLES = 12;
+const STABLE_MAX_VISIBLE_MISSED_CYCLES = 24;
 const POSE_ASSISTED_SCORE_FLOOR = 0.18;
 const DETECTOR_ONLY_SCORE_FLOOR = 0.50;
 const DETECTOR_ONLY_FAST_SCORE = 0.64;
@@ -2789,6 +2789,58 @@ function smoothBox(previous, next) {
   );
 }
 
+function stabilizeTrackedBox(track, detection) {
+  const previous = track.bbox;
+  const next = detection.bbox;
+  const previousArea = boxArea(previous);
+  const nextArea = boxArea(next);
+  const partialBodyReplacement =
+    track.confirmed &&
+    nextArea < previousArea * 0.58 &&
+    intersectionOverSmaller(previous, next) >= 0.72;
+  if (!partialBodyReplacement) return smoothBox(previous, next);
+
+  // Keep the established person-sized rectangle when a later scan sees only
+  // a face, arm, or torso. Follow the center gently without shrinking.
+  const previousCenter = boxCenter(previous);
+  const nextCenter = boxCenter(next);
+  const centerWeight = 0.22;
+  return [
+    previous[0] + (nextCenter[0] - previousCenter[0]) * centerWeight,
+    previous[1] + (nextCenter[1] - previousCenter[1]) * centerWeight,
+    previous[2],
+    previous[3],
+  ];
+}
+
+function duplicatesAlreadyMatchedTrack(track, detection, now) {
+  if (!track.confirmed) return false;
+  const overlap = intersectionOverUnion(track.bbox, detection.bbox);
+  const containment = intersectionOverSmaller(track.bbox, detection.bbox);
+  if (overlap < 0.42 && containment < 0.68) return false;
+
+  const trackCenter = boxCenter(track.bbox);
+  const detectionCenter = boxCenter(detection.bbox);
+  const centerDistance = Math.hypot(
+    trackCenter[0] - detectionCenter[0],
+    trackCenter[1] - detectionCenter[1],
+  );
+  const smallerDiagonal = Math.max(
+    1,
+    Math.min(
+      Math.hypot(track.bbox[2], track.bbox[3]),
+      Math.hypot(detection.bbox[2], detection.bbox[3]),
+    ),
+  );
+  const smallerWidth = Math.max(1, Math.min(track.bbox[2], detection.bbox[2]));
+  const horizontalDistance = Math.abs(trackCenter[0] - detectionCenter[0]);
+  return (
+    centerDistance <= smallerDiagonal * 0.45 &&
+    horizontalDistance <= smallerWidth * 0.55 &&
+    motionAwareTrackMatchScore(track, detection, now) >= 0.35
+  );
+}
+
 function motionAwareTrackMatchScore(track, detection, now) {
   const elapsed = clamp(now - track.lastSeen, 0, TRACK_HOLD_MS);
   const predictedBox = [
@@ -2851,7 +2903,10 @@ function isTrackVisible(track, now) {
   const centerY = (track.bbox[1] + track.bbox[3] / 2) / sourceHeight;
   const nearFrameEdge =
     centerX < 0.07 || centerX > 0.93 || centerY < 0.07 || centerY > 0.93;
-  const stableTrack = track.hits >= 4 && speed < 0.05 && !nearFrameEdge;
+  const reliableTrack =
+    track.hits >= 3 && (track.poseHits >= 1 || track.maxScore >= DETECTOR_ONLY_FAST_SCORE);
+  const rapidlyMoving = speed > 0.65;
+  const stableTrack = reliableTrack && !rapidlyMoving && !nearFrameEdge;
   const holdMs = stableTrack
     ? STABLE_DISPLAY_TRACK_HOLD_MS
     : nearFrameEdge
@@ -2902,7 +2957,7 @@ function updateTracks(detections, now) {
         measuredVelocityX * 0.45;
       bestTrack.velocityY = (bestTrack.velocityY || 0) * 0.55 +
         measuredVelocityY * 0.45;
-      bestTrack.bbox = smoothBox(bestTrack.bbox, detection.bbox);
+      bestTrack.bbox = stabilizeTrackedBox(bestTrack, detection);
       bestTrack.score = detection.score;
       bestTrack.maxScore = Math.max(bestTrack.maxScore, detection.score);
       bestTrack.hits += 1;
@@ -2921,6 +2976,11 @@ function updateTracks(detections, now) {
       if (bestTrack.hits >= requiredHits) bestTrack.confirmed = true;
       unmatchedTracks.delete(bestTrack.id);
     } else {
+      const duplicateOfMatchedTrack = state.tracks.some((track) =>
+        !unmatchedTracks.has(track.id) &&
+        duplicatesAlreadyMatchedTrack(track, detection, now)
+      );
+      if (duplicateOfMatchedTrack) continue;
       const instantlyConfirmed = Boolean(
         detection.verifiedByPose ||
         detection.score >= DETECTOR_ONLY_INSTANT_SCORE
