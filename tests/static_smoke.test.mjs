@@ -4,6 +4,7 @@ import { constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
+  areAlignedBodyPartDetections,
   areOppositeSplitPairMembers,
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
@@ -51,12 +52,6 @@ for (const id of [
   "imageResultGuidance",
   "imageRecommendationTitle",
   "imageRecommendationMessage",
-  "imageCorrectionHint",
-  "imageCorrectionTarget",
-  "addMissedPersonButton",
-  "splitDetectionButton",
-  "removeDetectionButton",
-  "undoImageCorrectionButton",
   "countValue",
   "capacityMetric",
   "capacityStatus",
@@ -76,6 +71,8 @@ for (const id of [
 ]) {
   assert.match(html, new RegExp(`id=["']${id}["']`), `missing #${id}`);
 }
+assert.doesNotMatch(html, /Correct difficult crowd results/);
+assert.doesNotMatch(html, /addMissedPersonButton|splitDetectionButton|removeDetectionButton/);
 
 const boot = await readFile(path.join(root, "src/js/boot.js"), "utf8");
 assert.match(boot, /import\(["'].\/app\.js/);
@@ -150,7 +147,7 @@ assert.match(app, /multiPersonDetections/);
 assert.match(app, /function refineMergedImageCandidates/);
 assert.match(app, /selectDistinctSplitPair/);
 assert.match(app, /recoveredFromMergedBox/);
-assert.match(app, /detection_geometry\.js\?v=20261124-ops4/);
+assert.match(app, /detection_geometry\.js\?v=20261124-ops5/);
 assert.match(app, /function motionAwareTrackMatchScore/);
 assert.match(app, /function canReacquireMovingTrack/);
 assert.match(app, /function isTrackVisible/);
@@ -168,14 +165,9 @@ assert.match(app, /function appendImageScanDetections/);
 assert.match(app, /IMAGE_DETAIL_SCORE_FLOOR\s*=\s*0\.28/);
 assert.match(app, /groupedScanIds/);
 assert.match(app, /contained torso\/full-body duplicate/);
-assert.match(app, /function applyImageCorrection/);
-assert.match(app, /function suggestedManualBoxSize/);
-assert.match(app, /manualCorrection:\s*"added"/);
-assert.match(app, /manualCorrection:\s*"split"/);
-assert.match(app, /function undoImageCorrection/);
-assert.match(app, /scrollIntoView/);
-assert.match(app, /imageResultCanvas\.addEventListener\("click", applyImageCorrection\)/);
-assert.match(app, /imageResultCanvas\.addEventListener\("pointerup", applyImageCorrection\)/);
+assert.match(app, /function suppressImageBodyPartDuplicates/);
+assert.match(app, /areAlignedBodyPartDetections/);
+assert.doesNotMatch(app, /applyImageCorrection|manualCorrection|imageCorrectionMode/);
 assert.match(app, /strongStandalonePose/);
 assert.match(app, /haveDistinctPoseIdentities/);
 assert.match(app, /Stop entry and move at least/);
@@ -282,6 +274,47 @@ assert.equal(
   ),
   true,
   "opposite members of one recovered pair must remain separate",
+);
+
+assert.equal(
+  areAlignedBodyPartDetections(
+    { bbox: [300, 130, 45, 95], score: 0.72 },
+    { bbox: [294, 225, 40, 42], score: 0.43 },
+  ),
+  true,
+  "vertically aligned upper and lower body fragments should merge",
+);
+assert.equal(
+  areAlignedBodyPartDetections(
+    { bbox: [500, 200, 90, 220], score: 0.64 },
+    { bbox: [510, 220, 60, 100], score: 0.51 },
+  ),
+  true,
+  "a nested partial-body box should merge into the full-person box",
+);
+assert.equal(
+  areAlignedBodyPartDetections(
+    { bbox: [300, 300, 70, 250], score: 0.67 },
+    { bbox: [365, 300, 70, 250], score: 0.64 },
+  ),
+  false,
+  "side-by-side people must remain separate",
+);
+assert.equal(
+  areAlignedBodyPartDetections(
+    { bbox: [200, 160, 100, 300], splitPairId: "pair", splitSide: "left" },
+    { bbox: [270, 160, 100, 300], splitPairId: "pair", splitSide: "right" },
+  ),
+  false,
+  "automatic merged-pair recovery must remain two people",
+);
+assert.equal(
+  areAlignedBodyPartDetections(
+    { bbox: [400, 100, 90, 120], verifiedByPose: true, poseId: 1 },
+    { bbox: [405, 225, 100, 260], verifiedByPose: true, poseId: 2 },
+  ),
+  false,
+  "independently posed people above and below each other must remain separate",
 );
 
 console.log(`SHEMBOT checkpoint smoke test passed (${requiredFiles.length} assets).`);

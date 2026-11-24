@@ -24,6 +24,90 @@ export function areOppositeSplitPairMembers(first, second) {
   );
 }
 
+/**
+ * Identify two boxes that describe different visible parts of one person.
+ * This is intentionally image-only post-processing: it requires strong
+ * horizontal alignment, so ordinary side-by-side people remain separate.
+ */
+export function areAlignedBodyPartDetections(first, second) {
+  const firstBox = first?.bbox;
+  const secondBox = second?.bbox;
+  if (!firstBox || !secondBox || areOppositeSplitPairMembers(first, second)) {
+    return false;
+  }
+
+  const firstArea = boxArea(firstBox);
+  const secondArea = boxArea(secondBox);
+  const areaRatio = Math.max(firstArea, secondArea) /
+    Math.max(1, Math.min(firstArea, secondArea));
+  if (areaRatio > 5.5) return false;
+
+  const horizontalIntersection = Math.max(
+    0,
+    Math.min(firstBox[0] + firstBox[2], secondBox[0] + secondBox[2]) -
+      Math.max(firstBox[0], secondBox[0]),
+  );
+  const verticalIntersection = Math.max(
+    0,
+    Math.min(firstBox[1] + firstBox[3], secondBox[1] + secondBox[3]) -
+      Math.max(firstBox[1], secondBox[1]),
+  );
+  const independentlyPosedPeople =
+    first.verifiedByPose &&
+    second.verifiedByPose &&
+    haveDistinctPoseIdentities(first, second);
+  if (independentlyPosedPeople && verticalIntersection === 0) return false;
+  const smallerWidth = Math.max(1, Math.min(firstBox[2], secondBox[2]));
+  const smallerHeight = Math.max(1, Math.min(firstBox[3], secondBox[3]));
+  const horizontalOverlap = horizontalIntersection / smallerWidth;
+  const verticalOverlap = verticalIntersection / smallerHeight;
+  const firstCenterX = firstBox[0] + firstBox[2] / 2;
+  const secondCenterX = secondBox[0] + secondBox[2] / 2;
+  const firstCenterY = firstBox[1] + firstBox[3] / 2;
+  const secondCenterY = secondBox[1] + secondBox[3] / 2;
+  const centerXDistance = Math.abs(firstCenterX - secondCenterX);
+  const centerDistance = Math.hypot(
+    firstCenterX - secondCenterX,
+    firstCenterY - secondCenterY,
+  );
+  const smallerDiagonal = Math.max(
+    1,
+    Math.min(
+      Math.hypot(firstBox[2], firstBox[3]),
+      Math.hypot(secondBox[2], secondBox[3]),
+    ),
+  );
+  const intersectionArea = horizontalIntersection * verticalIntersection;
+  const containment = intersectionArea / Math.max(1, Math.min(firstArea, secondArea));
+
+  const nestedPart =
+    containment >= 0.72 &&
+    centerXDistance <= smallerWidth * 0.55 &&
+    centerDistance <= smallerDiagonal * 0.7;
+  if (nestedPart) return true;
+
+  const firstBottom = firstBox[1] + firstBox[3];
+  const secondBottom = secondBox[1] + secondBox[3];
+  const verticalGap = Math.max(
+    0,
+    Math.max(firstBox[1], secondBox[1]) - Math.min(firstBottom, secondBottom),
+  );
+  const verticalUnion = Math.max(firstBottom, secondBottom) -
+    Math.min(firstBox[1], secondBox[1]);
+  const maximumHeight = Math.max(firstBox[3], secondBox[3], 1);
+  const alignedFragments =
+    horizontalOverlap >= 0.68 &&
+    centerXDistance <= smallerWidth * 0.48 &&
+    verticalGap <= smallerHeight * 0.22 &&
+    verticalUnion <= maximumHeight * 1.9;
+  const overlappingSlices =
+    horizontalOverlap >= 0.72 &&
+    verticalOverlap >= 0.22 &&
+    centerXDistance <= smallerWidth * 0.5 &&
+    verticalUnion <= maximumHeight * 1.8;
+  return alignedFragments || overlappingSlices;
+}
+
 function intersectionOverArea(inner, outer) {
   const left = Math.max(inner[0], outer[0]);
   const top = Math.max(inner[1], outer[1]);

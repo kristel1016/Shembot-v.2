@@ -4,11 +4,12 @@ import {
   PoseLandmarker,
 } from "../../lib/mediapipe/vision_bundle.js";
 import {
+  areAlignedBodyPartDetections,
   areOppositeSplitPairMembers,
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
   selectDistinctSplitPair,
-} from "./detection_geometry.js?v=20261124-ops4";
+} from "./detection_geometry.js?v=20261124-ops5";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -84,9 +85,6 @@ const elements = {
   imageAnalysisError: document.querySelector("#imageAnalysisError"),
   imageAnalysisResult: document.querySelector("#imageAnalysisResult"),
   imageResultCanvas: document.querySelector("#imageResultCanvas"),
-  imageCorrectionTarget: document.querySelector("#imageCorrectionTarget"),
-  imageCorrectionTargetTitle: document.querySelector("#imageCorrectionTargetTitle"),
-  imageCorrectionTargetText: document.querySelector("#imageCorrectionTargetText"),
   imagePeopleCount: document.querySelector("#imagePeopleCount"),
   imageCapacityStatus: document.querySelector("#imageCapacityStatus"),
   imageProcessingTime: document.querySelector("#imageProcessingTime"),
@@ -94,11 +92,6 @@ const elements = {
   imageResultGuidance: document.querySelector("#imageResultGuidance"),
   imageRecommendationTitle: document.querySelector("#imageRecommendationTitle"),
   imageRecommendationMessage: document.querySelector("#imageRecommendationMessage"),
-  imageCorrectionHint: document.querySelector("#imageCorrectionHint"),
-  addMissedPersonButton: document.querySelector("#addMissedPersonButton"),
-  splitDetectionButton: document.querySelector("#splitDetectionButton"),
-  removeDetectionButton: document.querySelector("#removeDetectionButton"),
-  undoImageCorrectionButton: document.querySelector("#undoImageCorrectionButton"),
   areaStatus: document.querySelector("#areaStatus"),
   zoneSelection: document.querySelector("#zoneSelection"),
   zoneDraft: document.querySelector("#zoneDraft"),
@@ -245,9 +238,6 @@ const state = {
   imageDetectorPromise: null,
   imageAnalysisFilename: "shembot-image-result",
   imageAnalysisDetections: [],
-  imageAnalysisProcessingMs: 0,
-  imageCorrectionMode: null,
-  imageCorrectionHistory: [],
   vision: null,
   detectorModelName: "custom",
   detectorRecoveryPromise: null,
@@ -1365,22 +1355,17 @@ function renderAnalyzedImage(detections, processingMs) {
 
   detections.forEach((detection, index) => {
     const [x, y, boxWidth, boxHeight] = detection.bbox;
-    const label = detection.manualCorrection
-      ? denseImage
-        ? `P${index + 1} M`
-        : `P${index + 1} MANUAL`
-      : denseImage
-        ? `P${index + 1}`
-        : `P${index + 1} ${Math.round(detection.score * 100)}%`;
-    const boxColor = detection.manualCorrection ? "#31b97a" : accent;
-    context.strokeStyle = boxColor;
+    const label = denseImage
+      ? `P${index + 1}`
+      : `P${index + 1} ${Math.round(detection.score * 100)}%`;
+    context.strokeStyle = accent;
     context.strokeRect(x, y, boxWidth, boxHeight);
     const textWidth = context.measureText(label).width;
     const labelHeight = fontSize + 10;
     const labelY = denseImage
       ? Math.max(0, y + lineWidth)
       : Math.max(0, y - labelHeight);
-    context.fillStyle = boxColor;
+    context.fillStyle = accent;
     context.fillRect(x, labelY, textWidth + 14, labelHeight);
     context.fillStyle = "#07111f";
     context.fillText(label, x + 7, labelY + 4);
@@ -1443,231 +1428,21 @@ function renderAnalyzedImage(detections, processingMs) {
   }
 
   if (detections.length) {
-    const automaticDetections = detections.filter((detection) =>
-      !detection.manualCorrection
-    );
-    const manualCount = detections.length - automaticDetections.length;
-    const confidenceValues = automaticDetections.map((detection) =>
+    const confidenceValues = detections.map((detection) =>
       Math.round(detection.score * 100)
     );
-    if (!confidenceValues.length) {
-      elements.imageDetectionDetails.textContent =
-        `${detections.length} manually corrected people in the final estimate. ` +
-        "Manual boxes do not have model confidence.";
-      updateImageCorrectionUi();
-      return;
-    }
     const averageConfidence = Math.round(average(confidenceValues));
     const minimumConfidence = Math.min(...confidenceValues);
     const maximumConfidence = Math.max(...confidenceValues);
-    const manualSummary = manualCount
-      ? ` Final estimate includes ${manualCount} manual ${manualCount === 1 ? "correction" : "corrections"}.`
-      : "";
     elements.imageDetectionDetails.textContent =
-      `${automaticDetections.length} automatic detections accepted \u2022 ` +
+      `${detections.length} automatic detections accepted \u2022 ` +
       `average confidence ${averageConfidence}% \u2022 ` +
       `range ${minimumConfidence}\u2013${maximumConfidence}%. ` +
-      "Confidence is not system accuracy; visually confirm the estimated count." +
-      manualSummary;
+      "Confidence is not system accuracy; visually confirm the estimated count.";
   } else {
     elements.imageDetectionDetails.textContent =
       "No confidence summary is available because no person detections were accepted.";
   }
-  updateImageCorrectionUi();
-}
-
-function updateImageCorrectionUi() {
-  const mode = state.imageCorrectionMode;
-  const buttonModes = [
-    [elements.addMissedPersonButton, "add", "Add missed person"],
-    [elements.splitDetectionButton, "split", "Split merged pair"],
-    [elements.removeDetectionButton, "remove", "Remove duplicate"],
-  ];
-  buttonModes.forEach(([button, buttonMode, label]) => {
-    button.setAttribute("aria-pressed", String(mode === buttonMode));
-    button.textContent = mode === buttonMode ? `Cancel: ${label}` : label;
-  });
-  elements.undoImageCorrectionButton.disabled =
-    state.imageCorrectionHistory.length === 0;
-  elements.imageResultCanvas.classList.toggle("is-correcting", Boolean(mode));
-  elements.imageCorrectionTarget.hidden = !mode;
-
-  if (mode === "add") {
-    elements.imageCorrectionHint.textContent =
-      "Add tool selected. Now tap the center of the missed person in the photo.";
-    elements.imageCorrectionTargetTitle.textContent = "ADD MISSED PERSON";
-    elements.imageCorrectionTargetText.textContent = "Tap the person's center";
-  } else if (mode === "split") {
-    elements.imageCorrectionHint.textContent =
-      "Split tool selected. Now tap the broad rectangle that contains two people.";
-    elements.imageCorrectionTargetTitle.textContent = "SPLIT MERGED PAIR";
-    elements.imageCorrectionTargetText.textContent = "Tap the broad rectangle";
-  } else if (mode === "remove") {
-    elements.imageCorrectionHint.textContent =
-      "Remove tool selected. Now tap the unwanted duplicate rectangle.";
-    elements.imageCorrectionTargetTitle.textContent = "REMOVE DUPLICATE";
-    elements.imageCorrectionTargetText.textContent = "Tap the unwanted rectangle";
-  } else {
-    elements.imageCorrectionHint.textContent =
-      "Step 1: choose a correction. Step 2: tap the person or box in the photo.";
-  }
-}
-
-function setImageCorrectionMode(mode) {
-  state.imageCorrectionMode = state.imageCorrectionMode === mode ? null : mode;
-  updateImageCorrectionUi();
-  if (state.imageCorrectionMode) {
-    window.requestAnimationFrame(() => {
-      elements.imageResultCanvas.scrollIntoView({
-        behavior: "smooth",
-        block: "center",
-      });
-    });
-  }
-}
-
-function saveImageCorrectionSnapshot() {
-  state.imageCorrectionHistory.push(
-    state.imageAnalysisDetections.map((detection) => ({
-      ...detection,
-      bbox: [...detection.bbox],
-    })),
-  );
-  if (state.imageCorrectionHistory.length > 20) {
-    state.imageCorrectionHistory.shift();
-  }
-}
-
-function imageCanvasPoint(event) {
-  const canvas = elements.imageResultCanvas;
-  const rect = canvas.getBoundingClientRect();
-  return [
-    clamp((event.clientX - rect.left) * canvas.width / Math.max(1, rect.width), 0, canvas.width),
-    clamp((event.clientY - rect.top) * canvas.height / Math.max(1, rect.height), 0, canvas.height),
-  ];
-}
-
-function detectionContainingPoint(point, preferLargest) {
-  const [pointX, pointY] = point;
-  const matches = state.imageAnalysisDetections.filter((detection) => {
-    const [x, y, width, height] = detection.bbox;
-    return pointX >= x && pointX <= x + width &&
-      pointY >= y && pointY <= y + height;
-  });
-  matches.sort((first, second) =>
-    (preferLargest ? -1 : 1) * (boxArea(first.bbox) - boxArea(second.bbox))
-  );
-  return matches[0] || null;
-}
-
-function suggestedManualBoxSize(point) {
-  const nearby = [...state.imageAnalysisDetections].sort((first, second) => {
-    const firstCenter = boxCenter(first.bbox);
-    const secondCenter = boxCenter(second.bbox);
-    return Math.hypot(firstCenter[0] - point[0], firstCenter[1] - point[1]) -
-      Math.hypot(secondCenter[0] - point[0], secondCenter[1] - point[1]);
-  })[0];
-  if (nearby) {
-    return [
-      clamp(nearby.bbox[2], 20, imageSourceCanvas.width * 0.22),
-      clamp(nearby.bbox[3], 40, imageSourceCanvas.height * 0.42),
-    ];
-  }
-  return [
-    Math.max(24, imageSourceCanvas.width * 0.065),
-    Math.max(48, imageSourceCanvas.height * 0.2),
-  ];
-}
-
-function applyImageCorrection(event) {
-  const mode = state.imageCorrectionMode;
-  if (!mode) return;
-  event.preventDefault();
-  const point = imageCanvasPoint(event);
-  let appliedMessage = "Correction applied. The final count and download were updated.";
-
-  if (mode === "add") {
-    saveImageCorrectionSnapshot();
-    const [width, height] = suggestedManualBoxSize(point);
-    state.imageAnalysisDetections.push({
-      bbox: [
-        clamp(point[0] - width / 2, 0, imageSourceCanvas.width - width),
-        clamp(point[1] - height / 2, 0, imageSourceCanvas.height - height),
-        width,
-        height,
-      ],
-      score: 1,
-      manualCorrection: "added",
-      scanId: `manual-add-${Date.now()}`,
-      edgeCropped: false,
-    });
-    appliedMessage = "Missed person added. The green M box is included in the final count.";
-  } else if (mode === "split") {
-    const target = detectionContainingPoint(point, true);
-    if (!target) {
-      elements.imageCorrectionHint.textContent =
-        "No box was found there. Tap inside the broad box you want to split.";
-      return;
-    }
-    saveImageCorrectionSnapshot();
-    const index = state.imageAnalysisDetections.indexOf(target);
-    const [x, y, width, height] = target.bbox;
-    const splitId = `manual-split-${Date.now()}`;
-    const common = {
-      ...target,
-      manualCorrection: "split",
-      splitPairId: splitId,
-      verifiedByPose: false,
-      poseId: null,
-    };
-    state.imageAnalysisDetections.splice(index, 1,
-      {
-        ...common,
-        bbox: [x, y, width * 0.55, height],
-        splitSide: "left",
-        scanId: `${splitId}-left`,
-      },
-      {
-        ...common,
-        bbox: [x + width * 0.45, y, width * 0.55, height],
-        splitSide: "right",
-        scanId: `${splitId}-right`,
-      },
-    );
-    appliedMessage = "Merged detection split into two people. Both green M boxes are counted.";
-  } else if (mode === "remove") {
-    const target = detectionContainingPoint(point, false);
-    if (!target) {
-      elements.imageCorrectionHint.textContent =
-        "No box was found there. Tap inside the duplicate box you want to remove.";
-      return;
-    }
-    saveImageCorrectionSnapshot();
-    state.imageAnalysisDetections.splice(
-      state.imageAnalysisDetections.indexOf(target),
-      1,
-    );
-    appliedMessage = "Duplicate detection removed from the final count.";
-  }
-
-  state.imageCorrectionMode = null;
-  renderAnalyzedImage(
-    state.imageAnalysisDetections,
-    state.imageAnalysisProcessingMs,
-  );
-  elements.imageCorrectionHint.textContent = appliedMessage;
-}
-
-function undoImageCorrection() {
-  const previous = state.imageCorrectionHistory.pop();
-  if (!previous) return;
-  state.imageAnalysisDetections = previous;
-  renderAnalyzedImage(
-    state.imageAnalysisDetections,
-    state.imageAnalysisProcessingMs,
-  );
-  elements.imageCorrectionHint.textContent =
-    "Last correction undone. The final count and download were restored.";
 }
 
 async function analyzeImageFile(file) {
@@ -1681,10 +1456,7 @@ async function analyzeImageFile(file) {
     return;
   }
 
-  state.imageCorrectionMode = null;
-  state.imageCorrectionHistory = [];
   state.imageAnalysisDetections = [];
-  updateImageCorrectionUi();
   setImageAnalysisView("progress");
   await new Promise((resolve) => requestAnimationFrame(resolve));
   let image;
@@ -1751,7 +1523,7 @@ async function analyzeImageFile(file) {
         verifiedByPose: false,
         poseScore: null,
       }));
-    const detections = consolidateDetections(
+    const detections = suppressImageBodyPartDuplicates(consolidateDetections(
       withPoseEvidence.filter((candidate) => {
         if (candidate.verifiedByPose) return true;
         if (candidate.score >= IMAGE_UNSUPPORTED_SCORE_FLOOR) return true;
@@ -1767,7 +1539,7 @@ async function analyzeImageFile(file) {
           )
         );
       }),
-    );
+    ));
     const processingMs = performance.now() - startedAt;
     state.imageAnalysisFilename = (file.name.replace(/\.[^.]+$/, "") || "image")
       .replace(/[^a-z0-9_-]+/gi, "-")
@@ -1776,7 +1548,6 @@ async function analyzeImageFile(file) {
       ...detection,
       bbox: [...detection.bbox],
     }));
-    state.imageAnalysisProcessingMs = processingMs;
     renderAnalyzedImage(state.imageAnalysisDetections, processingMs);
     recordHistory("image-analysis", {
       count: detections.length,
@@ -2579,6 +2350,42 @@ function hasIndependentImageSupport(candidate, candidates) {
       candidate.scanId !== other.scanId;
     return separateScan && detectionsCorrespond(candidate, other);
   });
+}
+
+function suppressImageBodyPartDuplicates(detections) {
+  const accepted = [];
+  for (const candidate of detections) {
+    const duplicateIndex = accepted.findIndex((kept) =>
+      areAlignedBodyPartDetections(kept, candidate)
+    );
+    if (duplicateIndex < 0) {
+      accepted.push(candidate);
+      continue;
+    }
+
+    const kept = accepted[duplicateIndex];
+    const candidateArea = boxArea(candidate.bbox);
+    const keptArea = boxArea(kept.bbox);
+    const candidateIsMoreComplete =
+      candidateArea > keptArea * 1.18 &&
+      candidate.score >= kept.score - 0.18;
+    const keptIsMoreComplete =
+      keptArea > candidateArea * 1.18 &&
+      kept.score >= candidate.score - 0.18;
+    const candidateQuality = candidate.score +
+      (candidate.verifiedByPose ? 0.08 : 0) +
+      (candidate.fromFullScan ? 0.03 : 0);
+    const keptQuality = kept.score +
+      (kept.verifiedByPose ? 0.08 : 0) +
+      (kept.fromFullScan ? 0.03 : 0);
+    if (
+      candidateIsMoreComplete ||
+      (!keptIsMoreComplete && candidateQuality > keptQuality)
+    ) {
+      accepted[duplicateIndex] = candidate;
+    }
+  }
+  return accepted;
 }
 
 function poseMatchQuality(detection, pose) {
@@ -3663,18 +3470,6 @@ elements.closeImageAnalysisButton.addEventListener("click", () => {
 elements.chooseImageButton.addEventListener("click", chooseImageFile);
 elements.chooseAnotherImageButton.addEventListener("click", chooseImageFile);
 elements.downloadImageResultButton.addEventListener("click", downloadAnalyzedImage);
-elements.addMissedPersonButton.addEventListener("click", () => {
-  setImageCorrectionMode("add");
-});
-elements.splitDetectionButton.addEventListener("click", () => {
-  setImageCorrectionMode("split");
-});
-elements.removeDetectionButton.addEventListener("click", () => {
-  setImageCorrectionMode("remove");
-});
-elements.undoImageCorrectionButton.addEventListener("click", undoImageCorrection);
-elements.imageResultCanvas.addEventListener("pointerup", applyImageCorrection);
-elements.imageResultCanvas.addEventListener("click", applyImageCorrection);
 elements.imageFileInput.addEventListener("change", () => {
   const [file] = elements.imageFileInput.files || [];
   if (file) void analyzeImageFile(file);

@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f3f6ff" />
     <meta name="description" content="Private, on-device people counting from your phone or laptop camera." />
     <title>Shembot Vision Console</title>
-    <link rel="stylesheet" href="./assets/css/styles.css?v=20261124-ops4" />
+    <link rel="stylesheet" href="./assets/css/styles.css?v=20261124-ops5" />
     <script>
       /* Universal range-progress tracker for custom slider fill */
       function syncRangeProgress(el) {
@@ -34,7 +34,7 @@
       });
       window.addEventListener('resize', syncWorkspaceScale, { passive: true });
     </script>
-    <script defer src="./src/js/boot.js?v=20261124-ops4"></script>
+    <script defer src="./src/js/boot.js?v=20261124-ops5"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -369,29 +369,13 @@
 
           <section class="image-analysis-result" id="imageAnalysisResult" hidden aria-label="Image detection result">
             <div class="image-result-canvas-wrap">
-              <canvas class="image-result-canvas" id="imageResultCanvas" width="960" height="540" aria-label="Annotated uploaded image. Select a correction tool, then tap a person or detection box."></canvas>
-              <div class="image-correction-target" id="imageCorrectionTarget" role="status" aria-live="polite" hidden>
-                <strong id="imageCorrectionTargetTitle">Correction tool selected</strong>
-                <span id="imageCorrectionTargetText">Tap the photo to apply it.</span>
-              </div>
+              <canvas class="image-result-canvas" id="imageResultCanvas" width="960" height="540" aria-label="Automatically annotated uploaded image"></canvas>
             </div>
             <div class="image-result-summary">
               <span><small>Estimated people</small><strong id="imagePeopleCount">0</strong></span>
               <span><small>Room status</small><strong id="imageCapacityStatus" data-status="safe">SAFE</strong></span>
               <span><small>Processing</small><strong id="imageProcessingTime">0 ms</strong></span>
             </div>
-            <section class="image-correction-tools" aria-labelledby="imageCorrectionTitle">
-              <div class="image-correction-copy">
-                <span>
-                  <strong id="imageCorrectionTitle">Correct difficult crowd results</strong>
-                  <small id="imageCorrectionHint" aria-live="polite">Step 1: choose a correction. Step 2: tap the person or box in the photo.</small>
-                </span>
-                <button class="image-correction-button" id="addMissedPersonButton" type="button" aria-pressed="false">Add missed person</button>
-                <button class="image-correction-button" id="splitDetectionButton" type="button" aria-pressed="false">Split merged pair</button>
-                <button class="image-correction-button" id="removeDetectionButton" type="button" aria-pressed="false">Remove duplicate</button>
-                <button class="image-correction-button" id="undoImageCorrectionButton" type="button" disabled>Undo</button>
-              </div>
-            </section>
             <aside class="image-result-guidance" id="imageResultGuidance" data-status="safe">
               <span class="image-guidance-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M12 2a8 8 0 0 0-5 14.2V20h10v-3.8A8 8 0 0 0 12 2Zm3 13.2V18H9v-2.8l-.8-.6A6 6 0 1 1 15.8 14l-.8.6v.6ZM9 22h6v-2H9v2Z" /></svg>
