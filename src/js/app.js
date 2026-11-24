@@ -8,7 +8,7 @@ import {
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
   selectDistinctSplitPair,
-} from "./detection_geometry.js?v=20261124-image6";
+} from "./detection_geometry.js?v=20261124-live1";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -27,17 +27,21 @@ const POSE_MODEL_PATH = new URL(
   import.meta.url,
 ).href;
 const MAX_INFERENCE_DIMENSION = 768;
-const TRACK_HOLD_MS = 3500;
+const TRACK_HOLD_MS = 1500;
+const DISPLAY_TRACK_HOLD_MS = 850;
 const RECALIBRATE_AFTER_MS = 30000;
-const MAX_CONFIRMED_MISSED_CYCLES = 10;
+const MAX_CONFIRMED_MISSED_CYCLES = 4;
+const MAX_VISIBLE_MISSED_CYCLES = 1;
 const POSE_ASSISTED_SCORE_FLOOR = 0.18;
 const DETECTOR_ONLY_SCORE_FLOOR = 0.50;
-const DETECTOR_ONLY_FAST_SCORE = 0.68;
+const DETECTOR_ONLY_FAST_SCORE = 0.64;
+const DETECTOR_ONLY_INSTANT_SCORE = 0.78;
+const MOTION_REACQUIRE_SCORE_FLOOR = 0.28;
 const IMAGE_PROPOSAL_SCORE_FLOOR = 0.15;
 const IMAGE_DETECTOR_SCORE_FLOOR = 0.30;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const POSE_VERIFICATION_INTERVAL_MS = 420;
-const POSE_CACHE_MS = 1600;
+const POSE_CACHE_MS = 650;
 const MAX_POSES = 30;
 const ORIENTATION_SAMPLES = 2;
 const QUALITY_CHECK_INTERVAL_MS = 1200;
@@ -2278,7 +2282,12 @@ function posesAreDuplicate(first, second) {
   );
 }
 
-function attachPoseEvidence(people, poses, frame) {
+function attachPoseEvidence(
+  people,
+  poses,
+  frame,
+  { allowStandalonePoses = true } = {},
+) {
   // Pose is supporting evidence, not a hard gate. Each detector candidate is
   // retained, while a one-to-one pose match can confirm it immediately. When
   // one broad detector box spans multiple strong poses, replace it with the
@@ -2321,7 +2330,7 @@ function attachPoseEvidence(people, poses, frame) {
       }
     }
     if (bestIndex < 0) {
-      if (pose.strongStandalonePose) {
+      if (allowStandalonePoses && pose.strongStandalonePose) {
         candidates.push({
           bbox: [...pose.bbox],
           score: pose.score,
@@ -2406,6 +2415,60 @@ function smoothBox(previous, next) {
   );
 }
 
+function motionAwareTrackMatchScore(track, detection, now) {
+  const elapsed = clamp(now - track.lastSeen, 0, TRACK_HOLD_MS);
+  const predictedBox = [
+    track.bbox[0] + (track.velocityX || 0) * elapsed,
+    track.bbox[1] + (track.velocityY || 0) * elapsed,
+    track.bbox[2],
+    track.bbox[3],
+  ];
+  const ordinaryScore = boxMatchScore(track.bbox, detection.bbox);
+  const predictedScore = boxMatchScore(predictedBox, detection.bbox);
+  const directScore = Math.max(ordinaryScore, predictedScore);
+  if (directScore > 0) return directScore;
+
+  const trackArea = boxArea(track.bbox);
+  const detectionArea = boxArea(detection.bbox);
+  const areaRatio = Math.max(trackArea, detectionArea) /
+    Math.max(1, Math.min(trackArea, detectionArea));
+  if (areaRatio > 2.5) return 0;
+
+  const predictedCenter = boxCenter(predictedBox);
+  const detectionCenter = boxCenter(detection.bbox);
+  const distance = Math.hypot(
+    predictedCenter[0] - detectionCenter[0],
+    predictedCenter[1] - detectionCenter[1],
+  );
+  const smallerDiagonal = Math.max(
+    1,
+    Math.min(
+      Math.hypot(track.bbox[2], track.bbox[3]),
+      Math.hypot(detection.bbox[2], detection.bbox[3]),
+    ),
+  );
+  const maximumMotion = smallerDiagonal * 0.9;
+  if (distance > maximumMotion) return 0;
+  return 0.18 + (1 - distance / maximumMotion) * 0.24;
+}
+
+function canReacquireMovingTrack(detection, now) {
+  if (detection.score < MOTION_REACQUIRE_SCORE_FLOOR) return false;
+  return state.tracks.some((track) =>
+    track.confirmed &&
+    now - track.lastSeen <= TRACK_HOLD_MS &&
+    motionAwareTrackMatchScore(track, detection, now) > 0.17
+  );
+}
+
+function isTrackVisible(track, now) {
+  return (
+    track.confirmed &&
+    now - track.lastSeen <= DISPLAY_TRACK_HOLD_MS &&
+    track.missedCycles <= MAX_VISIBLE_MISSED_CYCLES
+  );
+}
+
 function nextAvailableTrackId() {
   const usedIds = new Set(state.tracks.map((track) => track.id));
   let id = 1;
@@ -2418,11 +2481,11 @@ function updateTracks(detections, now) {
 
   for (const detection of detections) {
     let bestTrack = null;
-    let bestScore = 0.2;
+    let bestScore = 0.17;
 
     for (const track of state.tracks) {
       if (!unmatchedTracks.has(track.id)) continue;
-      const score = boxMatchScore(track.bbox, detection.bbox);
+      const score = motionAwareTrackMatchScore(track, detection, now);
       if (score > bestScore) {
         bestTrack = track;
         bestScore = score;
@@ -2430,6 +2493,15 @@ function updateTracks(detections, now) {
     }
 
     if (bestTrack) {
+      const previousCenter = boxCenter(bestTrack.bbox);
+      const nextCenter = boxCenter(detection.bbox);
+      const elapsed = Math.max(1, now - bestTrack.lastSeen);
+      const measuredVelocityX = (nextCenter[0] - previousCenter[0]) / elapsed;
+      const measuredVelocityY = (nextCenter[1] - previousCenter[1]) / elapsed;
+      bestTrack.velocityX = (bestTrack.velocityX || 0) * 0.55 +
+        measuredVelocityX * 0.45;
+      bestTrack.velocityY = (bestTrack.velocityY || 0) * 0.55 +
+        measuredVelocityY * 0.45;
       bestTrack.bbox = smoothBox(bestTrack.bbox, detection.bbox);
       bestTrack.score = detection.score;
       bestTrack.maxScore = Math.max(bestTrack.maxScore, detection.score);
@@ -2443,6 +2515,10 @@ function updateTracks(detections, now) {
       if (bestTrack.hits >= requiredHits) bestTrack.confirmed = true;
       unmatchedTracks.delete(bestTrack.id);
     } else {
+      const instantlyConfirmed = Boolean(
+        detection.verifiedByPose ||
+        detection.score >= DETECTOR_ONLY_INSTANT_SCORE
+      );
       state.tracks.push({
         id: nextAvailableTrackId(),
         bbox: detection.bbox,
@@ -2453,7 +2529,9 @@ function updateTracks(detections, now) {
         fromFullScan: detection.fromFullScan,
         missedCycles: 0,
         lastSeen: now,
-        confirmed: Boolean(detection.verifiedByPose),
+        velocityX: 0,
+        velocityY: 0,
+        confirmed: instantlyConfirmed,
       });
     }
   }
@@ -2470,11 +2548,11 @@ function updateTracks(detections, now) {
     }
     else state.flowTracks.delete(track.id);
   }
-  const confirmedTracks = consolidateDetections(
+  const consolidatedConfirmedTracks = consolidateDetections(
     activeTracks.filter((track) => track.confirmed),
   );
   const retainedConfirmedIds = new Set(
-    confirmedTracks.map((track) => track.id),
+    consolidatedConfirmedTracks.map((track) => track.id),
   );
   state.tracks = activeTracks.filter((track) => {
     const retain = !track.confirmed || retainedConfirmedIds.has(track.id);
@@ -2482,7 +2560,9 @@ function updateTracks(detections, now) {
     return retain;
   });
 
-  return confirmedTracks;
+  return consolidatedConfirmedTracks.filter((track) =>
+    isTrackVisible(track, now)
+  );
 }
 
 function updateFlowTracking(tracks, now) {
@@ -2775,14 +2855,21 @@ function detectLoop(token) {
       state.lastPoseDetections = poseDetections;
     }
     const candidatesWithPose = poseWasAvailable && state.poseLandmarker
-      ? attachPoseEvidence(people, poseDetections, frame)
+      ? attachPoseEvidence(people, poseDetections, frame, {
+        // Cached landmarks may verify a current detector box, but only fresh
+        // pose inference may create a standalone person. This prevents a pose
+        // box from remaining after someone has left the frame.
+        allowStandalonePoses: needsPoseVerification,
+      })
       : people.map((detection) => ({
         ...detection,
         verifiedByPose: false,
         poseScore: null,
       }));
     const countCandidates = candidatesWithPose.filter((detection) =>
-      detection.verifiedByPose || detection.score >= DETECTOR_ONLY_SCORE_FLOOR
+      detection.verifiedByPose ||
+      detection.score >= DETECTOR_ONLY_SCORE_FLOOR ||
+      canReacquireMovingTrack(detection, now)
     );
     state.scanDetections.push(...countCandidates);
     updatePipelineDiagnostics({
@@ -2795,7 +2882,7 @@ function detectLoop(token) {
     });
     const scanCycleComplete = state.scanIndex === 0;
     let confirmedTracks = consolidateDetections(
-      state.tracks.filter((track) => track.confirmed),
+      state.tracks.filter((track) => isTrackVisible(track, startedAt)),
     );
 
     if (scanCycleComplete) {
