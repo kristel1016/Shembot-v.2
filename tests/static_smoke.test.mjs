@@ -51,6 +51,11 @@ for (const id of [
   "imageResultGuidance",
   "imageRecommendationTitle",
   "imageRecommendationMessage",
+  "imageCorrectionHint",
+  "addMissedPersonButton",
+  "splitDetectionButton",
+  "removeDetectionButton",
+  "undoImageCorrectionButton",
   "countValue",
   "capacityMetric",
   "capacityStatus",
@@ -133,13 +138,23 @@ assert.match(app, /multiPersonDetections/);
 assert.match(app, /function refineMergedImageCandidates/);
 assert.match(app, /selectDistinctSplitPair/);
 assert.match(app, /recoveredFromMergedBox/);
-assert.match(app, /detection_geometry\.js\?v=20261124-live1/);
+assert.match(app, /detection_geometry\.js\?v=20261124-crowd1/);
 assert.match(app, /function motionAwareTrackMatchScore/);
 assert.match(app, /function canReacquireMovingTrack/);
 assert.match(app, /function isTrackVisible/);
 assert.match(app, /state\.tracks\.filter\(\(track\) => isTrackVisible\(track, startedAt\)\)/);
 assert.match(app, /allowStandalonePoses:\s*needsPoseVerification/);
 assert.match(app, /velocityX/);
+assert.match(app, /function detailedCrowdScanAreas/);
+assert.match(app, /function appendImageScanDetections/);
+assert.match(app, /IMAGE_DETAIL_SCORE_FLOOR\s*=\s*0\.26/);
+assert.match(app, /groupedScanIds/);
+assert.match(app, /ObjectDetector already suppresses duplicate boxes within one scan/);
+assert.match(app, /function applyImageCorrection/);
+assert.match(app, /function suggestedManualBoxSize/);
+assert.match(app, /manualCorrection:\s*"added"/);
+assert.match(app, /manualCorrection:\s*"split"/);
+assert.match(app, /function undoImageCorrection/);
 assert.match(app, /strongStandalonePose/);
 assert.match(app, /haveDistinctPoseIdentities/);
 assert.match(app, /Reduce occupancy by at least/);

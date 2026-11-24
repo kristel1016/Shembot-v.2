@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f3f6ff" />
     <meta name="description" content="Private, on-device people counting from your phone or laptop camera." />
     <title>Shembot Vision Console</title>
-    <link rel="stylesheet" href="./assets/css/styles.css?v=20261124-image4" />
+    <link rel="stylesheet" href="./assets/css/styles.css?v=20261124-crowd1" />
     <script>
       /* Universal range-progress tracker for custom slider fill */
       function syncRangeProgress(el) {
@@ -34,7 +34,7 @@
       });
       window.addEventListener('resize', syncWorkspaceScale, { passive: true });
     </script>
-    <script defer src="./src/js/boot.js?v=20261124-live1"></script>
+    <script defer src="./src/js/boot.js?v=20261124-crowd1"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -376,6 +376,18 @@
               <span><small>Room status</small><strong id="imageCapacityStatus" data-status="safe">SAFE</strong></span>
               <span><small>Processing</small><strong id="imageProcessingTime">0 ms</strong></span>
             </div>
+            <section class="image-correction-tools" aria-labelledby="imageCorrectionTitle">
+              <div class="image-correction-copy">
+                <span>
+                  <strong id="imageCorrectionTitle">Correct difficult crowd results</strong>
+                  <small id="imageCorrectionHint" aria-live="polite">Use these controls when occlusion causes a missed, merged, or duplicate box.</small>
+                </span>
+                <button class="image-correction-button" id="addMissedPersonButton" type="button" aria-pressed="false">Add missed person</button>
+                <button class="image-correction-button" id="splitDetectionButton" type="button" aria-pressed="false">Split merged pair</button>
+                <button class="image-correction-button" id="removeDetectionButton" type="button" aria-pressed="false">Remove duplicate</button>
+                <button class="image-correction-button" id="undoImageCorrectionButton" type="button" disabled>Undo</button>
+              </div>
+            </section>
             <aside class="image-result-guidance" id="imageResultGuidance" data-status="safe">
               <span class="image-guidance-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M12 2a8 8 0 0 0-5 14.2V20h10v-3.8A8 8 0 0 0 12 2Zm3 13.2V18H9v-2.8l-.8-.6A6 6 0 1 1 15.8 14l-.8.6v.6ZM9 22h6v-2H9v2Z" /></svg>

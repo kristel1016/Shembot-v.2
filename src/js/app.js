@@ -8,7 +8,7 @@ import {
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
   selectDistinctSplitPair,
-} from "./detection_geometry.js?v=20261124-live1";
+} from "./detection_geometry.js?v=20261124-crowd1";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -39,6 +39,7 @@ const DETECTOR_ONLY_INSTANT_SCORE = 0.78;
 const MOTION_REACQUIRE_SCORE_FLOOR = 0.28;
 const IMAGE_PROPOSAL_SCORE_FLOOR = 0.15;
 const IMAGE_DETECTOR_SCORE_FLOOR = 0.30;
+const IMAGE_DETAIL_SCORE_FLOOR = 0.26;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const POSE_VERIFICATION_INTERVAL_MS = 420;
 const POSE_CACHE_MS = 650;
@@ -87,6 +88,11 @@ const elements = {
   imageResultGuidance: document.querySelector("#imageResultGuidance"),
   imageRecommendationTitle: document.querySelector("#imageRecommendationTitle"),
   imageRecommendationMessage: document.querySelector("#imageRecommendationMessage"),
+  imageCorrectionHint: document.querySelector("#imageCorrectionHint"),
+  addMissedPersonButton: document.querySelector("#addMissedPersonButton"),
+  splitDetectionButton: document.querySelector("#splitDetectionButton"),
+  removeDetectionButton: document.querySelector("#removeDetectionButton"),
+  undoImageCorrectionButton: document.querySelector("#undoImageCorrectionButton"),
   areaStatus: document.querySelector("#areaStatus"),
   zoneSelection: document.querySelector("#zoneSelection"),
   zoneDraft: document.querySelector("#zoneDraft"),
@@ -232,6 +238,10 @@ const state = {
   imageDetector: null,
   imageDetectorPromise: null,
   imageAnalysisFilename: "shembot-image-result",
+  imageAnalysisDetections: [],
+  imageAnalysisProcessingMs: 0,
+  imageCorrectionMode: null,
+  imageCorrectionHistory: [],
   vision: null,
   detectorModelName: "custom",
   detectorRecoveryPromise: null,
@@ -1098,6 +1108,84 @@ function imageScanAreas(width, height) {
   ];
 }
 
+function detailedCrowdScanAreas(width, height) {
+  const tileWidth = Math.max(1, Math.round(width * 0.34));
+  const tileHeight = Math.max(1, Math.round(height * 0.42));
+  const right = Math.max(0, width - tileWidth);
+  const bottom = Math.max(0, height - tileHeight);
+  const xPositions = [0, 1 / 3, 2 / 3, 1].map((step) =>
+    Math.round(right * step)
+  );
+  const yPositions = [0, 0.5, 1].map((step) => Math.round(bottom * step));
+  return yPositions.flatMap((y, row) =>
+    xPositions.map((x, column) => ({
+      x,
+      y,
+      width: tileWidth,
+      height: tileHeight,
+      kind: "detail",
+      scanId: `detail-${row}-${column}`,
+    }))
+  );
+}
+
+function appendImageScanDetections(
+  detector,
+  areas,
+  imageWidth,
+  imageHeight,
+  candidates,
+) {
+  for (const area of areas) {
+    imageScanCanvas.width = area.width;
+    imageScanCanvas.height = area.height;
+    imageScanContext.drawImage(
+      imageSourceCanvas,
+      area.x,
+      area.y,
+      area.width,
+      area.height,
+      0,
+      0,
+      area.width,
+      area.height,
+    );
+    const frame = imageFrame(area.width, area.height);
+    const result = detector.detect(imageScanCanvas);
+    for (const detection of result.detections || []) {
+      if (!isPlausiblePerson(detection, frame, IMAGE_PROPOSAL_SCORE_FLOOR)) continue;
+      const category = getCategory(detection);
+      const box = detection.boundingBox;
+      candidates.push({
+        bbox: [
+          area.x + box.originX,
+          area.y + box.originY,
+          box.width,
+          box.height,
+        ],
+        score: category.score,
+        fromFullScan: area.kind === "full",
+        fromDetailedScan: area.kind === "detail",
+        scanId: area.scanId,
+        relativeScanArea: (box.width * box.height) /
+          Math.max(1, imageWidth * imageHeight),
+        edgeCropped: false,
+      });
+    }
+  }
+}
+
+function needsDetailedCrowdScan(candidates, width, height) {
+  const accepted = candidates.filter((candidate) =>
+    candidate.score >= IMAGE_DETAIL_SCORE_FLOOR
+  );
+  const frameArea = Math.max(1, width * height);
+  const smallPeople = accepted.filter((candidate) =>
+    boxArea(candidate.bbox) / frameArea <= 0.018
+  ).length;
+  return accepted.length >= 10 || smallPeople >= 5;
+}
+
 function mergedPairScanParents(candidates, width, height) {
   const frameArea = Math.max(1, width * height);
   const plausible = candidates
@@ -1122,7 +1210,7 @@ function mergedPairScanParents(candidates, width, height) {
     if (!unique.some((kept) => boxesAreDuplicate(kept.bbox, candidate.bbox))) {
       unique.push(candidate);
     }
-    if (unique.length >= 8) break;
+    if (unique.length >= 5) break;
   }
   return unique;
 }
@@ -1260,17 +1348,22 @@ function renderAnalyzedImage(detections, processingMs) {
 
   detections.forEach((detection, index) => {
     const [x, y, boxWidth, boxHeight] = detection.bbox;
-    const label = denseImage
-      ? `P${index + 1}`
-      : `P${index + 1} ${Math.round(detection.score * 100)}%`;
-    context.strokeStyle = accent;
+    const label = detection.manualCorrection
+      ? denseImage
+        ? `P${index + 1} M`
+        : `P${index + 1} MANUAL`
+      : denseImage
+        ? `P${index + 1}`
+        : `P${index + 1} ${Math.round(detection.score * 100)}%`;
+    const boxColor = detection.manualCorrection ? "#31b97a" : accent;
+    context.strokeStyle = boxColor;
     context.strokeRect(x, y, boxWidth, boxHeight);
     const textWidth = context.measureText(label).width;
     const labelHeight = fontSize + 10;
     const labelY = denseImage
       ? Math.max(0, y + lineWidth)
       : Math.max(0, y - labelHeight);
-    context.fillStyle = accent;
+    context.fillStyle = boxColor;
     context.fillRect(x, labelY, textWidth + 14, labelHeight);
     context.fillStyle = "#07111f";
     context.fillText(label, x + 7, labelY + 4);
@@ -1330,21 +1423,207 @@ function renderAnalyzedImage(detections, processingMs) {
   }
 
   if (detections.length) {
-    const confidenceValues = detections.map((detection) =>
+    const automaticDetections = detections.filter((detection) =>
+      !detection.manualCorrection
+    );
+    const manualCount = detections.length - automaticDetections.length;
+    const confidenceValues = automaticDetections.map((detection) =>
       Math.round(detection.score * 100)
     );
+    if (!confidenceValues.length) {
+      elements.imageDetectionDetails.textContent =
+        `${detections.length} manually corrected people in the final estimate. ` +
+        "Manual boxes do not have model confidence.";
+      updateImageCorrectionUi();
+      return;
+    }
     const averageConfidence = Math.round(average(confidenceValues));
     const minimumConfidence = Math.min(...confidenceValues);
     const maximumConfidence = Math.max(...confidenceValues);
+    const manualSummary = manualCount
+      ? ` Final estimate includes ${manualCount} manual ${manualCount === 1 ? "correction" : "corrections"}.`
+      : "";
     elements.imageDetectionDetails.textContent =
-      `${detections.length} individual detections accepted • ` +
-      `average confidence ${averageConfidence}% • ` +
-      `range ${minimumConfidence}–${maximumConfidence}%. ` +
-      "Confidence is not system accuracy; visually confirm the estimated count.";
+      `${automaticDetections.length} automatic detections accepted \u2022 ` +
+      `average confidence ${averageConfidence}% \u2022 ` +
+      `range ${minimumConfidence}\u2013${maximumConfidence}%. ` +
+      "Confidence is not system accuracy; visually confirm the estimated count." +
+      manualSummary;
   } else {
     elements.imageDetectionDetails.textContent =
       "No confidence summary is available because no person detections were accepted.";
   }
+  updateImageCorrectionUi();
+}
+
+function updateImageCorrectionUi() {
+  const mode = state.imageCorrectionMode;
+  const buttonModes = [
+    [elements.addMissedPersonButton, "add"],
+    [elements.splitDetectionButton, "split"],
+    [elements.removeDetectionButton, "remove"],
+  ];
+  buttonModes.forEach(([button, buttonMode]) => {
+    button.setAttribute("aria-pressed", String(mode === buttonMode));
+  });
+  elements.undoImageCorrectionButton.disabled =
+    state.imageCorrectionHistory.length === 0;
+  elements.imageResultCanvas.classList.toggle("is-correcting", Boolean(mode));
+
+  if (mode === "add") {
+    elements.imageCorrectionHint.textContent =
+      "Tap the center of each missed person. A green manual box will be added.";
+  } else if (mode === "split") {
+    elements.imageCorrectionHint.textContent =
+      "Tap a broad box that contains two people. It will become two green boxes.";
+  } else if (mode === "remove") {
+    elements.imageCorrectionHint.textContent =
+      "Tap the unwanted duplicate box to remove it from the final estimate.";
+  } else {
+    elements.imageCorrectionHint.textContent =
+      "Use these controls when occlusion causes a missed, merged, or duplicate box.";
+  }
+}
+
+function setImageCorrectionMode(mode) {
+  state.imageCorrectionMode = state.imageCorrectionMode === mode ? null : mode;
+  updateImageCorrectionUi();
+}
+
+function saveImageCorrectionSnapshot() {
+  state.imageCorrectionHistory.push(
+    state.imageAnalysisDetections.map((detection) => ({
+      ...detection,
+      bbox: [...detection.bbox],
+    })),
+  );
+  if (state.imageCorrectionHistory.length > 20) {
+    state.imageCorrectionHistory.shift();
+  }
+}
+
+function imageCanvasPoint(event) {
+  const canvas = elements.imageResultCanvas;
+  const rect = canvas.getBoundingClientRect();
+  return [
+    clamp((event.clientX - rect.left) * canvas.width / Math.max(1, rect.width), 0, canvas.width),
+    clamp((event.clientY - rect.top) * canvas.height / Math.max(1, rect.height), 0, canvas.height),
+  ];
+}
+
+function detectionContainingPoint(point, preferLargest) {
+  const [pointX, pointY] = point;
+  const matches = state.imageAnalysisDetections.filter((detection) => {
+    const [x, y, width, height] = detection.bbox;
+    return pointX >= x && pointX <= x + width &&
+      pointY >= y && pointY <= y + height;
+  });
+  matches.sort((first, second) =>
+    (preferLargest ? -1 : 1) * (boxArea(first.bbox) - boxArea(second.bbox))
+  );
+  return matches[0] || null;
+}
+
+function suggestedManualBoxSize(point) {
+  const nearby = [...state.imageAnalysisDetections].sort((first, second) => {
+    const firstCenter = boxCenter(first.bbox);
+    const secondCenter = boxCenter(second.bbox);
+    return Math.hypot(firstCenter[0] - point[0], firstCenter[1] - point[1]) -
+      Math.hypot(secondCenter[0] - point[0], secondCenter[1] - point[1]);
+  })[0];
+  if (nearby) {
+    return [
+      clamp(nearby.bbox[2], 20, imageSourceCanvas.width * 0.22),
+      clamp(nearby.bbox[3], 40, imageSourceCanvas.height * 0.42),
+    ];
+  }
+  return [
+    Math.max(24, imageSourceCanvas.width * 0.065),
+    Math.max(48, imageSourceCanvas.height * 0.2),
+  ];
+}
+
+function applyImageCorrection(event) {
+  const mode = state.imageCorrectionMode;
+  if (!mode) return;
+  event.preventDefault();
+  const point = imageCanvasPoint(event);
+
+  if (mode === "add") {
+    saveImageCorrectionSnapshot();
+    const [width, height] = suggestedManualBoxSize(point);
+    state.imageAnalysisDetections.push({
+      bbox: [
+        clamp(point[0] - width / 2, 0, imageSourceCanvas.width - width),
+        clamp(point[1] - height / 2, 0, imageSourceCanvas.height - height),
+        width,
+        height,
+      ],
+      score: 1,
+      manualCorrection: "added",
+      scanId: `manual-add-${Date.now()}`,
+      edgeCropped: false,
+    });
+  } else if (mode === "split") {
+    const target = detectionContainingPoint(point, true);
+    if (!target) {
+      elements.imageCorrectionHint.textContent =
+        "No box was found there. Tap inside the broad box you want to split.";
+      return;
+    }
+    saveImageCorrectionSnapshot();
+    const index = state.imageAnalysisDetections.indexOf(target);
+    const [x, y, width, height] = target.bbox;
+    const splitId = `manual-split-${Date.now()}`;
+    const common = {
+      ...target,
+      manualCorrection: "split",
+      splitPairId: splitId,
+      verifiedByPose: false,
+      poseId: null,
+    };
+    state.imageAnalysisDetections.splice(index, 1,
+      {
+        ...common,
+        bbox: [x, y, width * 0.55, height],
+        splitSide: "left",
+        scanId: `${splitId}-left`,
+      },
+      {
+        ...common,
+        bbox: [x + width * 0.45, y, width * 0.55, height],
+        splitSide: "right",
+        scanId: `${splitId}-right`,
+      },
+    );
+  } else if (mode === "remove") {
+    const target = detectionContainingPoint(point, false);
+    if (!target) {
+      elements.imageCorrectionHint.textContent =
+        "No box was found there. Tap inside the duplicate box you want to remove.";
+      return;
+    }
+    saveImageCorrectionSnapshot();
+    state.imageAnalysisDetections.splice(
+      state.imageAnalysisDetections.indexOf(target),
+      1,
+    );
+  }
+
+  renderAnalyzedImage(
+    state.imageAnalysisDetections,
+    state.imageAnalysisProcessingMs,
+  );
+}
+
+function undoImageCorrection() {
+  const previous = state.imageCorrectionHistory.pop();
+  if (!previous) return;
+  state.imageAnalysisDetections = previous;
+  renderAnalyzedImage(
+    state.imageAnalysisDetections,
+    state.imageAnalysisProcessingMs,
+  );
 }
 
 async function analyzeImageFile(file) {
@@ -1358,6 +1637,10 @@ async function analyzeImageFile(file) {
     return;
   }
 
+  state.imageCorrectionMode = null;
+  state.imageCorrectionHistory = [];
+  state.imageAnalysisDetections = [];
+  updateImageCorrectionUi();
   setImageAnalysisView("progress");
   await new Promise((resolve) => requestAnimationFrame(resolve));
   let image;
@@ -1380,40 +1663,21 @@ async function analyzeImageFile(file) {
     const detector = await getImageDetector();
     const startedAt = performance.now();
     const candidates = [];
-    for (const area of imageScanAreas(width, height)) {
-      imageScanCanvas.width = area.width;
-      imageScanCanvas.height = area.height;
-      imageScanContext.drawImage(
-        imageSourceCanvas,
-        area.x,
-        area.y,
-        area.width,
-        area.height,
-        0,
-        0,
-        area.width,
-        area.height,
+    appendImageScanDetections(
+      detector,
+      imageScanAreas(width, height),
+      width,
+      height,
+      candidates,
+    );
+    if (needsDetailedCrowdScan(candidates, width, height)) {
+      appendImageScanDetections(
+        detector,
+        detailedCrowdScanAreas(width, height),
+        width,
+        height,
+        candidates,
       );
-      const frame = imageFrame(area.width, area.height);
-      const result = detector.detect(imageScanCanvas);
-      for (const detection of result.detections || []) {
-        if (!isPlausiblePerson(detection, frame, IMAGE_PROPOSAL_SCORE_FLOOR)) continue;
-        const category = getCategory(detection);
-        const box = detection.boundingBox;
-        candidates.push({
-          bbox: [
-            area.x + box.originX,
-            area.y + box.originY,
-            box.width,
-            box.height,
-          ],
-          score: category.score,
-          fromFullScan: area.kind === "full",
-          scanId: area.scanId,
-          relativeScanArea: (box.width * box.height) / Math.max(1, width * height),
-          edgeCropped: false,
-        });
-      }
     }
 
     const refinedCandidates = refineMergedImageCandidates(
@@ -1445,14 +1709,24 @@ async function analyzeImageFile(file) {
       }));
     const detections = consolidateDetections(
       withPoseEvidence.filter((candidate) =>
-        candidate.verifiedByPose || candidate.score >= IMAGE_DETECTOR_SCORE_FLOOR
+        candidate.verifiedByPose ||
+        candidate.score >= IMAGE_DETECTOR_SCORE_FLOOR ||
+        (
+          candidate.fromDetailedScan &&
+          candidate.score >= IMAGE_DETAIL_SCORE_FLOOR
+        )
       ),
     );
     const processingMs = performance.now() - startedAt;
     state.imageAnalysisFilename = (file.name.replace(/\.[^.]+$/, "") || "image")
       .replace(/[^a-z0-9_-]+/gi, "-")
       .replace(/^-+|-+$/g, "") || "image";
-    renderAnalyzedImage(detections, processingMs);
+    state.imageAnalysisDetections = detections.map((detection) => ({
+      ...detection,
+      bbox: [...detection.bbox],
+    }));
+    state.imageAnalysisProcessingMs = processingMs;
+    renderAnalyzedImage(state.imageAnalysisDetections, processingMs);
     recordHistory("image-analysis", {
       count: detections.length,
       imageName: file.name,
@@ -2381,17 +2655,49 @@ function consolidateDetections(detections) {
     return second.score - first.score;
   });
   const unique = [];
+  const groupedScanIds = new Map();
 
   for (const detection of sorted) {
-    if (!unique.some((kept) =>
-      !haveDistinctPoseIdentities(kept, detection) &&
-      !areOppositeSplitPairMembers(kept, detection) &&
-      (
-        boxesAreDuplicate(kept.bbox, detection.bbox) ||
-        looksLikeSamePersonAcrossScales(kept, detection)
-      )
-    )) {
+    const detectionScanId = typeof detection.scanId === "string"
+      ? detection.scanId
+      : null;
+    let duplicateTarget = null;
+    let duplicateScore = -Infinity;
+
+    for (const kept of unique) {
+      if (
+        haveDistinctPoseIdentities(kept, detection) ||
+        areOppositeSplitPairMembers(kept, detection)
+      ) continue;
+
+      // ObjectDetector already suppresses duplicate boxes within one scan.
+      // Keeping same-scan boxes separate prevents two adjacent people from
+      // being collapsed merely because their bodies overlap in a crowd.
+      const keptScanIds = groupedScanIds.get(kept) || new Set();
+      if (detectionScanId && keptScanIds.has(detectionScanId)) continue;
+      if (
+        !boxesAreDuplicate(kept.bbox, detection.bbox) &&
+        !looksLikeSamePersonAcrossScales(kept, detection)
+      ) continue;
+
+      const quality =
+        intersectionOverUnion(kept.bbox, detection.bbox) * 2 +
+        intersectionOverSmaller(kept.bbox, detection.bbox) +
+        boxMatchScore(kept.bbox, detection.bbox);
+      if (quality > duplicateScore) {
+        duplicateTarget = kept;
+        duplicateScore = quality;
+      }
+    }
+
+    if (duplicateTarget) {
+      if (detectionScanId) groupedScanIds.get(duplicateTarget)?.add(detectionScanId);
+    } else {
       unique.push(detection);
+      groupedScanIds.set(
+        detection,
+        new Set(detectionScanId ? [detectionScanId] : []),
+      );
     }
   }
 
@@ -3181,6 +3487,17 @@ elements.closeImageAnalysisButton.addEventListener("click", () => {
 elements.chooseImageButton.addEventListener("click", chooseImageFile);
 elements.chooseAnotherImageButton.addEventListener("click", chooseImageFile);
 elements.downloadImageResultButton.addEventListener("click", downloadAnalyzedImage);
+elements.addMissedPersonButton.addEventListener("click", () => {
+  setImageCorrectionMode("add");
+});
+elements.splitDetectionButton.addEventListener("click", () => {
+  setImageCorrectionMode("split");
+});
+elements.removeDetectionButton.addEventListener("click", () => {
+  setImageCorrectionMode("remove");
+});
+elements.undoImageCorrectionButton.addEventListener("click", undoImageCorrection);
+elements.imageResultCanvas.addEventListener("pointerdown", applyImageCorrection);
 elements.imageFileInput.addEventListener("change", () => {
   const [file] = elements.imageFileInput.files || [];
   if (file) void analyzeImageFile(file);

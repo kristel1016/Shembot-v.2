@@ -1951,6 +1951,11 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   object-fit: contain;
 }
 
+.image-result-canvas.is-correcting {
+  cursor: crosshair;
+  touch-action: manipulation;
+}
+
 .image-result-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1990,6 +1995,67 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 #imageCapacityStatus[data-status="safe"] { color: var(--success); }
 #imageCapacityStatus[data-status="near"] { color: var(--warning); }
 #imageCapacityStatus[data-status="over"] { color: var(--danger); }
+
+.image-correction-tools {
+  padding: 13px 14px;
+  border: 1px solid rgba(91, 127, 212, 0.2);
+  border-radius: 12px;
+  background: var(--accent-tint);
+}
+
+.image-correction-copy {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.image-correction-copy > span {
+  display: grid;
+  min-width: 240px;
+  flex: 1 1 320px;
+  gap: 2px;
+}
+
+.image-correction-copy strong {
+  color: var(--ink);
+  font-size: 0.91rem;
+}
+
+.image-correction-copy small {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.image-correction-button {
+  min-height: 38px;
+  padding: 8px 11px;
+  border: 1px solid var(--border-medium);
+  border-radius: 9px;
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 0.79rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.image-correction-button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.image-correction-button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: #fff;
+  background: var(--accent);
+  box-shadow: 0 5px 14px rgba(91, 127, 212, 0.24);
+}
+
+.image-correction-button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
 
 .image-result-guidance {
   display: flex;
@@ -2271,6 +2337,20 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
   .image-result-summary {
     grid-template-columns: 1fr;
+  }
+
+  .image-correction-copy {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .image-correction-copy > span {
+    min-width: 0;
+    grid-column: 1 / -1;
+  }
+
+  .image-correction-button {
+    width: 100%;
   }
 
   .image-result-actions {
