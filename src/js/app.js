@@ -3,6 +3,7 @@ import {
   ObjectDetector,
   PoseLandmarker,
 } from "../../lib/mediapipe/vision_bundle.js";
+import { looksLikeSamePersonAcrossScales } from "./detection_geometry.js";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -21,15 +22,15 @@ const POSE_MODEL_PATH = new URL(
   import.meta.url,
 ).href;
 const MAX_INFERENCE_DIMENSION = 768;
-const TRACK_HOLD_MS = 2200;
+const TRACK_HOLD_MS = 3500;
 const RECALIBRATE_AFTER_MS = 30000;
-const MAX_CONFIRMED_MISSED_CYCLES = 6;
+const MAX_CONFIRMED_MISSED_CYCLES = 10;
 const POSE_ASSISTED_SCORE_FLOOR = 0.18;
-const DETECTOR_ONLY_SCORE_FLOOR = 0.28;
-const DETECTOR_ONLY_FAST_SCORE = 0.55;
+const DETECTOR_ONLY_SCORE_FLOOR = 0.50;
+const DETECTOR_ONLY_FAST_SCORE = 0.68;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const POSE_VERIFICATION_INTERVAL_MS = 420;
-const POSE_CACHE_MS = 1100;
+const POSE_CACHE_MS = 1600;
 const MAX_POSES = 30;
 const ORIENTATION_SAMPLES = 2;
 const QUALITY_CHECK_INTERVAL_MS = 1200;
@@ -1813,13 +1814,19 @@ function consolidateDetections(detections) {
   // full-frame box can cover several overlapping people, so discarding the
   // boxes inside it turns a crowd into one person.
   const countable = detections.filter((detection) => !detection.edgeCropped);
-  const sorted = [...countable].sort(
-    (first, second) => second.score - first.score,
-  );
+  const sorted = [...countable].sort((first, second) => {
+    const firstHasPose = Boolean(first.verifiedByPose || first.poseHits > 0);
+    const secondHasPose = Boolean(second.verifiedByPose || second.poseHits > 0);
+    if (firstHasPose !== secondHasPose) return secondHasPose ? 1 : -1;
+    return second.score - first.score;
+  });
   const unique = [];
 
   for (const detection of sorted) {
-    if (!unique.some((kept) => boxesAreDuplicate(kept.bbox, detection.bbox))) {
+    if (!unique.some((kept) =>
+      boxesAreDuplicate(kept.bbox, detection.bbox) ||
+      looksLikeSamePersonAcrossScales(kept, detection)
+    )) {
       unique.push(detection);
     }
   }
@@ -1875,6 +1882,7 @@ function updateTracks(detections, now) {
       if (detection.verifiedByPose) bestTrack.poseHits += 1;
       bestTrack.missedCycles = 0;
       bestTrack.lastSeen = now;
+      bestTrack.fromFullScan = detection.fromFullScan;
       if (detection.verifiedByPose) bestTrack.confirmed = true;
       const requiredHits = bestTrack.maxScore >= DETECTOR_ONLY_FAST_SCORE ? 2 : 3;
       if (bestTrack.hits >= requiredHits) bestTrack.confirmed = true;
@@ -1887,6 +1895,7 @@ function updateTracks(detections, now) {
         maxScore: detection.score,
         hits: 1,
         poseHits: detection.verifiedByPose ? 1 : 0,
+        fromFullScan: detection.fromFullScan,
         missedCycles: 0,
         lastSeen: now,
         confirmed: Boolean(detection.verifiedByPose),
@@ -1906,11 +1915,19 @@ function updateTracks(detections, now) {
     }
     else state.flowTracks.delete(track.id);
   }
-  state.tracks = activeTracks;
-
-  return consolidateDetections(
-    state.tracks.filter((track) => track.confirmed),
+  const confirmedTracks = consolidateDetections(
+    activeTracks.filter((track) => track.confirmed),
   );
+  const retainedConfirmedIds = new Set(
+    confirmedTracks.map((track) => track.id),
+  );
+  state.tracks = activeTracks.filter((track) => {
+    const retain = !track.confirmed || retainedConfirmedIds.has(track.id);
+    if (!retain) state.flowTracks.delete(track.id);
+    return retain;
+  });
+
+  return confirmedTracks;
 }
 
 function updateFlowTracking(tracks, now) {

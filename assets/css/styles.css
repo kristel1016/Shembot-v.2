@@ -389,7 +389,8 @@ canvas.overlay-disabled {
 .recording-indicator {
   position: absolute;
   z-index: 5;
-  top: 18px;
+  top: auto;
+  bottom: 18px;
   right: 18px;
   display: flex;
   align-items: center;

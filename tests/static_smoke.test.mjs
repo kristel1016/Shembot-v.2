@@ -3,6 +3,7 @@ import { access, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { looksLikeSamePersonAcrossScales } from "../src/js/detection_geometry.js";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(testDir, "..");
@@ -12,6 +13,7 @@ const requiredFiles = [
   "assets/css/styles.css",
   "src/js/boot.js",
   "src/js/app.js",
+  "src/js/detection_geometry.js",
   "lib/mediapipe/vision_bundle.js",
   "lib/mediapipe/models/efficientdet_lite0.tflite",
   "lib/mediapipe/models/efficientdet_lite0_generic.tflite",
@@ -68,6 +70,9 @@ assert.match(app, /function consolidateDetections/);
 assert.match(app, /function attachPoseEvidence/);
 assert.match(app, /DETECTOR_ONLY_SCORE_FLOOR/);
 assert.match(app, /DETECTOR_ONLY_FAST_SCORE/);
+assert.match(app, /DETECTOR_ONLY_SCORE_FLOOR\s*=\s*0\.50/);
+assert.match(app, /TRACK_HOLD_MS\s*=\s*3500/);
+assert.match(app, /looksLikeSamePersonAcrossScales/);
 assert.match(app, /detection\.verifiedByPose\s*\|\|\s*detection\.score/);
 assert.doesNotMatch(app, /counting is disabled/);
 assert.match(app, /continuing with detector tracking/);
@@ -95,6 +100,40 @@ assert.match(app, /recordingCanvas\.captureStream\(20\)/);
 assert.match(app, /formatRecordingTimestamp/);
 assert.match(app, /video-recording-start/);
 assert.match(app, /video-recording-end/);
+
+const screenshotUpperBody = {
+  bbox: [598, 127, 455, 425],
+  score: 0.46,
+  fromFullScan: true,
+  verifiedByPose: false,
+};
+const screenshotLowerBody = {
+  bbox: [654, 385, 475, 413],
+  score: 0.78,
+  fromFullScan: false,
+  verifiedByPose: true,
+};
+assert.equal(
+  looksLikeSamePersonAcrossScales(screenshotUpperBody, screenshotLowerBody),
+  true,
+  "overlapping full/tile boxes for the screenshot person should merge",
+);
+assert.equal(
+  looksLikeSamePersonAcrossScales(
+    screenshotLowerBody,
+    { ...screenshotUpperBody, bbox: [1100, 127, 455, 425] },
+  ),
+  false,
+  "side-by-side people should remain separate",
+);
+assert.equal(
+  looksLikeSamePersonAcrossScales(
+    { ...screenshotUpperBody, verifiedByPose: true },
+    screenshotLowerBody,
+  ),
+  false,
+  "two independently pose-supported boxes should remain separate",
+);
 
 console.log(`SHEMBOT checkpoint smoke test passed (${requiredFiles.length} assets).`);
 
