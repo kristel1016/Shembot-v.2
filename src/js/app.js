@@ -9,7 +9,7 @@ import {
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
   selectDistinctSplitPair,
-} from "./detection_geometry.js?v=20261124-ops5";
+} from "./detection_geometry.js?v=20261124-ops6";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -1344,7 +1344,7 @@ function renderAnalyzedImage(detections, processingMs) {
       ? "NEAR CAPACITY"
       : "SAFE";
   const lineWidth = Math.max(3, Math.round(Math.min(width, height) / 260));
-  const denseImage = detections.length > 12;
+  const denseImage = detections.length >= 8;
   const fontSize = Math.max(
     denseImage ? 13 : 16,
     Math.round(Math.min(width, height) / (denseImage ? 40 : 30)),
@@ -1517,7 +1517,10 @@ async function analyzeImageFile(file) {
       }
     }
     const withPoseEvidence = state.poseLandmarker
-      ? attachPoseEvidence(refinedCandidates, poseDetections, fullFrame)
+      ? attachPoseEvidence(refinedCandidates, poseDetections, fullFrame, {
+        allowStandalonePoses: true,
+        allowRecoverablePoses: true,
+      })
       : refinedCandidates.map((candidate) => ({
         ...candidate,
         verifiedByPose: false,
@@ -2082,6 +2085,13 @@ function poseResultToDetections(result, frame, scanArea) {
       hips.length === 2 &&
       visibleHeadPoints >= 2 &&
       landmarkConfidence >= 0.6;
+    const recoverableImagePose =
+      visible.length >= 9 &&
+      shoulders.length === 2 &&
+      hips.length >= 1 &&
+      visibleHeadPoints >= 1 &&
+      anatomicalRegions >= 3 &&
+      landmarkConfidence >= 0.52;
 
     return [{
       bbox: [left, top, right - left, bottom - top],
@@ -2091,6 +2101,7 @@ function poseResultToDetections(result, frame, scanArea) {
         Math.max(1, frame.sourceWidth * frame.sourceHeight),
       edgeCropped: false,
       strongStandalonePose,
+      recoverableImagePose,
     }];
   });
 }
@@ -2355,9 +2366,12 @@ function hasIndependentImageSupport(candidate, candidates) {
 function suppressImageBodyPartDuplicates(detections) {
   const accepted = [];
   for (const candidate of detections) {
-    const duplicateIndex = accepted.findIndex((kept) =>
-      areAlignedBodyPartDetections(kept, candidate)
-    );
+    const duplicateIndex = accepted.findIndex((kept) => {
+      const samePoseIdentity =
+        Number.isInteger(kept.poseId) &&
+        kept.poseId === candidate.poseId;
+      return samePoseIdentity || areAlignedBodyPartDetections(kept, candidate);
+    });
     if (duplicateIndex < 0) {
       accepted.push(candidate);
       continue;
@@ -2428,11 +2442,37 @@ function posesAreDuplicate(first, second) {
   );
 }
 
+function mergeDetectionWithPoseBox(detection, pose, frame) {
+  if (!detectionsCorrespond(detection, pose)) return [...detection.bbox];
+  const left = Math.min(detection.bbox[0], pose.bbox[0]);
+  const top = Math.min(detection.bbox[1], pose.bbox[1]);
+  const right = Math.max(
+    detection.bbox[0] + detection.bbox[2],
+    pose.bbox[0] + pose.bbox[2],
+  );
+  const bottom = Math.max(
+    detection.bbox[1] + detection.bbox[3],
+    pose.bbox[1] + pose.bbox[3],
+  );
+  const merged = [
+    clamp(left, 0, frame.sourceWidth),
+    clamp(top, 0, frame.sourceHeight),
+    clamp(right, 0, frame.sourceWidth) - clamp(left, 0, frame.sourceWidth),
+    clamp(bottom, 0, frame.sourceHeight) - clamp(top, 0, frame.sourceHeight),
+  ];
+  const mergedAreaRatio = boxArea(merged) /
+    Math.max(1, frame.sourceWidth * frame.sourceHeight);
+  return mergedAreaRatio <= 0.65 ? merged : [...detection.bbox];
+}
+
 function attachPoseEvidence(
   people,
   poses,
   frame,
-  { allowStandalonePoses = true } = {},
+  {
+    allowStandalonePoses = true,
+    allowRecoverablePoses = false,
+  } = {},
 ) {
   // Pose is supporting evidence, not a hard gate. Each detector candidate is
   // retained, while a one-to-one pose match can confirm it immediately. When
@@ -2476,7 +2516,10 @@ function attachPoseEvidence(
       }
     }
     if (bestIndex < 0) {
-      if (allowStandalonePoses && pose.strongStandalonePose) {
+      const canRecoverMissingPerson =
+        pose.strongStandalonePose ||
+        (allowRecoverablePoses && pose.recoverableImagePose);
+      if (allowStandalonePoses && canRecoverMissingPerson) {
         candidates.push({
           bbox: [...pose.bbox],
           score: pose.score,
@@ -2484,6 +2527,7 @@ function attachPoseEvidence(
           poseId: pose.poseId,
           verifiedByPose: true,
           standalonePose: true,
+          strongPoseEvidence: pose.strongStandalonePose,
           fromFullScan: true,
           scanId: `pose-${pose.poseId}`,
           relativeScanArea: boxArea(pose.bbox) /
@@ -2494,20 +2538,32 @@ function attachPoseEvidence(
       continue;
     }
 
-    const detection = candidates[bestIndex];
-    availableDetections.delete(bestIndex);
-    candidates[bestIndex] = {
-      ...detection,
-      // Pose boxes surround only visible landmarks and can shrink to a body
-      // part. Keep the detector's full-person box after pose verification.
-      bbox: [...detection.bbox],
-      poseScore: pose.score,
-      poseId: pose.poseId,
-      relativeScanArea: boxArea(detection.bbox) /
-        Math.max(1, frame.sourceWidth * frame.sourceHeight),
-      edgeCropped: false,
-      verifiedByPose: true,
-    };
+    const bestDetection = people[bestIndex];
+    const matchingIndexes = [...availableDetections].filter((index) => {
+      if (index === bestIndex) return true;
+      const detection = people[index];
+      const samePersonGeometry =
+        boxesAreDuplicate(bestDetection.bbox, detection.bbox) ||
+        looksLikeSamePersonAcrossScales(bestDetection, detection) ||
+        areAlignedBodyPartDetections(bestDetection, detection);
+      return samePersonGeometry && poseMatchQuality(detection, pose) > 0.8;
+    });
+    matchingIndexes.forEach((index) => {
+      const detection = candidates[index];
+      const mergedBox = mergeDetectionWithPoseBox(detection, pose, frame);
+      availableDetections.delete(index);
+      candidates[index] = {
+        ...detection,
+        bbox: mergedBox,
+        poseScore: pose.score,
+        poseId: pose.poseId,
+        strongPoseEvidence: pose.strongStandalonePose,
+        relativeScanArea: boxArea(mergedBox) /
+          Math.max(1, frame.sourceWidth * frame.sourceHeight),
+        edgeCropped: false,
+        verifiedByPose: true,
+      };
+    });
   }
 
   return candidates.filter((_, index) =>
