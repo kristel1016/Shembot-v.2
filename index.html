@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f3f6ff" />
     <meta name="description" content="Private, on-device people counting from your phone or laptop camera." />
     <title>Shembot Vision Console</title>
-    <link rel="stylesheet" href="./assets/css/styles.css?v=20261120-density1" />
+    <link rel="stylesheet" href="./assets/css/styles.css?v=20261124-recording1" />
     <script>
       /* Universal range-progress tracker for custom slider fill */
       function syncRangeProgress(el) {
@@ -34,7 +34,7 @@
       });
       window.addEventListener('resize', syncWorkspaceScale, { passive: true });
     </script>
-    <script defer src="./src/js/boot.js?v=20261121-fast-tracking1"></script>
+    <script defer src="./src/js/boot.js?v=20261124-recording1"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -55,9 +55,9 @@
               <span>People</span>
               <strong id="countValue" aria-live="polite">0</strong>
             </div>
-            <div class="metric metric-status">
+            <div class="metric metric-status" id="capacityMetric" data-status="safe">
               <span>Room status</span>
-              <strong id="capacityStatus" aria-live="polite">CAPACITY OK</strong>
+              <strong id="capacityStatus" aria-live="polite">SAFE</strong>
             </div>
             <div class="metric">
               <span>Performance</span>
@@ -91,6 +91,17 @@
                 <span class="hud-mode">PERSON DETECTION</span>
               </div>
 
+              <div class="recording-indicator" id="recordingIndicator" role="status" hidden>
+                <i aria-hidden="true"></i>
+                <strong>REC</strong>
+                <span id="recordingElapsed">00:00</span>
+              </div>
+
+              <div class="capacity-alert" id="capacityAlert" role="alert" hidden>
+                <strong>Overcapacity warning</strong>
+                <span id="capacityAlertMessage">Room capacity has been reached.</span>
+              </div>
+
               <div class="model-loading" id="modelLoading" role="status">
                 <span class="spinner"></span>
                 <span id="modelStatus">Preparing person detector...</span>
@@ -102,6 +113,9 @@
           <div class="viewport-actions">
             <button class="primary-button" id="startButton" disabled>
               <span class="button-icon">&#9679;</span> Start camera
+            </button>
+            <button class="record-button" id="recordButton" title="Record an annotated video locally" disabled>
+              <span aria-hidden="true"></span> Record video
             </button>
             <button class="icon-button" id="flipButton" aria-label="Switch camera" title="Switch camera" disabled>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.3 7H11V5H4v7h2V8.5A7 7 0 0 1 18.8 11h2A9 9 0 0 0 7.3 7ZM18 12v3.5A7 7 0 0 1 5.2 13h-2A9 9 0 0 0 16.7 17H13v2h7v-7h-2Z" /></svg>
@@ -185,8 +199,19 @@
               <span class="row-icon row-icon-cyan" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="m12 2 2.1 5.2L20 9l-4.5 3.7.2 5.8-3.7-2.2-3.7 2.2.2-5.8L4 9l5.9-1.8L12 2Z" /></svg>
               </span>
-              <span class="row-copy"><strong>Pose verification</strong><small>Strict person matching</small></span>
-              <span class="status-tag">AUTO</span>
+              <span class="row-copy"><strong>Pose assistance</strong><small>Optional confirmation evidence</small></span>
+              <span class="status-tag" id="poseStatusTag">ASSIST</span>
+            </div>
+
+            <div class="control-block pipeline-card" data-control-item data-search="pipeline diagnostics raw plausible pose candidates tracked recall">
+              <span class="range-heading"><span><strong>Detection pipeline</strong><small>Last scan and stable result</small></span></span>
+              <div class="pipeline-diagnostics" aria-label="Detection pipeline diagnostics">
+                <span><small>Raw</small><strong id="pipelineRaw">0</strong></span>
+                <span><small>Plausible</small><strong id="pipelinePlausible">0</strong></span>
+                <span><small>Pose</small><strong id="pipelinePose">0</strong></span>
+                <span><small>Candidates</small><strong id="pipelineCandidates">0</strong></span>
+                <span><small>Tracked</small><strong id="pipelineTracked">0</strong></span>
+              </div>
             </div>
           </section>
 
@@ -196,6 +221,14 @@
             <label class="control-block" for="capacityInput" data-control-item data-search="capacity room maximum limit people">
               <span class="range-heading"><span><strong>Room capacity</strong><small>Alert threshold</small></span><output id="capacityOutput" for="capacityInput">10 people</output></span>
               <input id="capacityInput" type="range" min="1" max="50" value="10" />
+            </label>
+
+            <label class="control-row" data-control-item data-search="alarm sound audio overcapacity alert">
+              <span class="row-icon row-icon-amber" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M10 5 6.5 8H3v8h3.5l3.5 3V5Zm2 4.2v5.6a3 3 0 0 0 0-5.6Zm0-4.1v2.1a5 5 0 0 1 0 9.6v2.1a7 7 0 0 0 0-13.8Z" /></svg>
+              </span>
+              <span class="row-copy"><strong>Capacity alarm</strong><small>Sound once when the limit is reached</small></span>
+              <span class="toggle"><input id="alertSoundToggle" type="checkbox" checked /><i></i></span>
             </label>
 
             <label class="control-row" data-control-item data-search="flow entry exit counter tracking">
@@ -220,6 +253,31 @@
                 <button class="secondary-button flow-direction-button" id="flowDirectionButton">Down = entry</button>
                 <button class="secondary-button flow-reset-button" id="resetFlowButton">Reset</button>
               </div>
+            </div>
+          </section>
+
+          <section class="control-section" data-control-section>
+            <h2>Live output</h2>
+
+            <div class="control-block session-output-card" data-control-item data-search="live occupancy graph chart session maximum average alerts report">
+              <span class="range-heading">
+                <span><strong>Occupancy over time</strong><small id="sessionStateLabel">Start the camera to begin a session</small></span>
+                <output id="sessionElapsed">00:00</output>
+              </span>
+              <div class="session-status-line">
+                <span>Current room status</span>
+                <strong id="sessionCurrentStatus" data-status="safe" aria-live="polite">SAFE</strong>
+              </div>
+              <div class="occupancy-chart-wrap">
+                <canvas class="occupancy-chart" id="occupancyChart" width="640" height="240" role="img" aria-label="No occupancy data yet"></canvas>
+                <p id="chartEmptyState">Live counts will appear here.</p>
+              </div>
+              <div class="session-stats" aria-label="Session summary">
+                <span><small>Maximum</small><strong id="sessionMax">0</strong></span>
+                <span><small>Average</small><strong id="sessionAverage">0.0</strong></span>
+                <span><small>Alerts</small><strong id="sessionAlerts">0</strong></span>
+              </div>
+              <button class="secondary-button session-report-button" id="downloadSessionButton" disabled>Download session report</button>
             </div>
           </section>
 

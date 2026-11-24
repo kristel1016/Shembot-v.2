@@ -139,11 +139,16 @@ optional shortcut for the JavaScript smoke test.
 ## Implemented at this checkpoint
 
 - MediaPipe EfficientDet-Lite0 person proposals, filtered to class `person`
-- lightweight PoseLandmarker verification
+- optional PoseLandmarker assistance with detector-only temporal fallback
 - portrait/landscape orientation testing
 - full-frame plus overlapping zoom scans for small people
 - NMS, containment-aware duplicate suppression, and cross-frame tracking
+- live raw/plausible/pose/candidate/tracked pipeline diagnostics
+- HD camera request and 768-pixel inference preparation
 - configurable room capacity and detection area
+- safe, near-capacity, and overcapacity status with an optional sound alert
+- live occupancy graph, session summary, and downloadable session CSV report
+- downloadable annotated camera recording with count, status, and local timestamp
 - front/rear camera switching and mirrored preview correction
 - lighting and clarity guidance
 - entry/exit line counter and local CSV history
@@ -196,7 +201,7 @@ data is collected.
 
 ## Privacy
 
-Detection, pose verification, tracking, and history remain in the browser.
+Detection, pose assistance, tracking, and history remain in the browser.
 Incorrect samples are downloaded only when the user explicitly requests it;
 they are never uploaded automatically.
 

@@ -20,17 +20,22 @@ const POSE_MODEL_PATH = new URL(
   "../../lib/mediapipe/models/pose_landmarker_lite.task",
   import.meta.url,
 ).href;
-const MAX_INFERENCE_DIMENSION = 512;
+const MAX_INFERENCE_DIMENSION = 768;
 const TRACK_HOLD_MS = 2200;
 const RECALIBRATE_AFTER_MS = 30000;
 const MAX_CONFIRMED_MISSED_CYCLES = 6;
+const POSE_ASSISTED_SCORE_FLOOR = 0.18;
+const DETECTOR_ONLY_SCORE_FLOOR = 0.28;
+const DETECTOR_ONLY_FAST_SCORE = 0.55;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
-const ZOOMED_SCORE_FLOOR = 0.25;
 const POSE_VERIFICATION_INTERVAL_MS = 420;
 const POSE_CACHE_MS = 1100;
+const MAX_POSES = 30;
 const ORIENTATION_SAMPLES = 2;
 const QUALITY_CHECK_INTERVAL_MS = 1200;
 const HISTORY_LIMIT = 1200;
+const SESSION_SAMPLE_INTERVAL_MS = 1000;
+const SESSION_POINT_LIMIT = 600;
 const MIN_POSE_LANDMARK_CONFIDENCE = 0.4;
 const MIN_CAMERA_DIMENSION = 16;
 
@@ -44,6 +49,9 @@ const elements = {
   modelLoading: document.querySelector("#modelLoading"),
   modelStatus: document.querySelector("#modelStatus"),
   startButton: document.querySelector("#startButton"),
+  recordButton: document.querySelector("#recordButton"),
+  recordingIndicator: document.querySelector("#recordingIndicator"),
+  recordingElapsed: document.querySelector("#recordingElapsed"),
   flipButton: document.querySelector("#flipButton"),
   sidebarFlipButton: document.querySelector("#sidebarFlipButton"),
   setAreaButton: document.querySelector("#setAreaButton"),
@@ -52,13 +60,24 @@ const elements = {
   zoneSelection: document.querySelector("#zoneSelection"),
   zoneDraft: document.querySelector("#zoneDraft"),
   countValue: document.querySelector("#countValue"),
+  capacityMetric: document.querySelector("#capacityMetric"),
   capacityStatus: document.querySelector("#capacityStatus"),
+  capacityAlert: document.querySelector("#capacityAlert"),
+  capacityAlertMessage: document.querySelector("#capacityAlertMessage"),
   fpsValue: document.querySelector("#fpsValue"),
   capacityInput: document.querySelector("#capacityInput"),
   capacityOutput: document.querySelector("#capacityOutput"),
+  alertSoundToggle: document.querySelector("#alertSoundToggle"),
+  detectionOverlayToggle: document.querySelector("#detectionOverlayToggle"),
   qualityAssistant: document.querySelector("#qualityAssistant"),
   qualityStatus: document.querySelector("#qualityStatus"),
   qualityMessage: document.querySelector("#qualityMessage"),
+  poseStatusTag: document.querySelector("#poseStatusTag"),
+  pipelineRaw: document.querySelector("#pipelineRaw"),
+  pipelinePlausible: document.querySelector("#pipelinePlausible"),
+  pipelinePose: document.querySelector("#pipelinePose"),
+  pipelineCandidates: document.querySelector("#pipelineCandidates"),
+  pipelineTracked: document.querySelector("#pipelineTracked"),
   actualCountInput: document.querySelector("#actualCountInput"),
   correctFeedbackButton: document.querySelector("#correctFeedbackButton"),
   issueFeedbackButton: document.querySelector("#issueFeedbackButton"),
@@ -73,6 +92,15 @@ const elements = {
   historyCount: document.querySelector("#historyCount"),
   downloadHistoryButton: document.querySelector("#downloadHistoryButton"),
   clearHistoryButton: document.querySelector("#clearHistoryButton"),
+  occupancyChart: document.querySelector("#occupancyChart"),
+  chartEmptyState: document.querySelector("#chartEmptyState"),
+  sessionStateLabel: document.querySelector("#sessionStateLabel"),
+  sessionCurrentStatus: document.querySelector("#sessionCurrentStatus"),
+  sessionElapsed: document.querySelector("#sessionElapsed"),
+  sessionMax: document.querySelector("#sessionMax"),
+  sessionAverage: document.querySelector("#sessionAverage"),
+  sessionAlerts: document.querySelector("#sessionAlerts"),
+  downloadSessionButton: document.querySelector("#downloadSessionButton"),
   errorMessage: document.querySelector("#errorMessage"),
   appStatus: document.querySelector("#appStatus"),
   appStatusLabel: document.querySelector("#appStatusLabel"),
@@ -88,6 +116,8 @@ const qualityContext = qualityCanvas.getContext("2d", {
   alpha: false,
   willReadFrequently: true,
 });
+const recordingCanvas = document.createElement("canvas");
+const recordingContext = recordingCanvas.getContext("2d", { alpha: false });
 
 function loadSavedArea() {
   try {
@@ -145,6 +175,23 @@ const lastSavedOccupancy = [...savedHistory]
   .reverse()
   .find((record) => record.event === "occupancy");
 
+function createEmptySession() {
+  return {
+    startedAt: null,
+    endedAt: null,
+    samples: [],
+    maxCount: 0,
+    totalCount: 0,
+    sampleCount: 0,
+    alertEvents: 0,
+    overcapacityStartedAt: null,
+    overcapacityDurationMs: 0,
+    lastSampleAt: 0,
+    lastSampleCount: null,
+    lastSampleStatus: null,
+  };
+}
+
 const state = {
   detector: null,
   vision: null,
@@ -176,6 +223,14 @@ const state = {
   dragStart: null,
   draftArea: null,
   wakeLock: null,
+  alertSoundEnabled: localStorage.getItem("alertSoundEnabled") !== "false",
+  alertAudioContext: null,
+  recording: null,
+  recordingSupported:
+    typeof window.MediaRecorder !== "undefined" &&
+    typeof recordingCanvas.captureStream === "function",
+  currentCapacityStatus: "safe",
+  session: createEmptySession(),
   lastQualityAt: -Infinity,
   quality: { code: "waiting", label: "Waiting for camera" },
   flowEnabled: localStorage.getItem("flowEnabled") === "true",
@@ -193,6 +248,13 @@ const state = {
   lastLoggedCount: lastSavedOccupancy
     ? Number(lastSavedOccupancy.count) || 0
     : null,
+  pipelineStats: {
+    raw: 0,
+    plausible: 0,
+    poseMatched: 0,
+    candidates: 0,
+    tracked: 0,
+  },
 };
 
 function clampStoredNumber(value, minimum, maximum, fallback) {
@@ -216,6 +278,15 @@ function clearError() {
   elements.errorMessage.textContent = "";
 }
 
+function updatePipelineDiagnostics(next = {}) {
+  Object.assign(state.pipelineStats, next);
+  elements.pipelineRaw.textContent = String(state.pipelineStats.raw);
+  elements.pipelinePlausible.textContent = String(state.pipelineStats.plausible);
+  elements.pipelinePose.textContent = String(state.pipelineStats.poseMatched);
+  elements.pipelineCandidates.textContent = String(state.pipelineStats.candidates);
+  elements.pipelineTracked.textContent = String(state.pipelineStats.tracked);
+}
+
 function updateAppStatus(label, tone) {
   elements.appStatusLabel.textContent = label;
   elements.appStatus.dataset.tone = tone;
@@ -235,12 +306,279 @@ function average(values) {
     : 0;
 }
 
+function getCapacityStatus(count, limit) {
+  if (count >= limit) return "over";
+  if (count / Math.max(1, limit) >= 0.8) return "near";
+  return "safe";
+}
+
+function prepareAlertAudio() {
+  if (!state.alertSoundEnabled) return null;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return null;
+  if (!state.alertAudioContext) {
+    state.alertAudioContext = new AudioContextClass();
+  }
+  if (state.alertAudioContext.state === "suspended") {
+    state.alertAudioContext.resume().catch(() => {});
+  }
+  return state.alertAudioContext;
+}
+
+function playCapacityAlarm() {
+  const audioContext = prepareAlertAudio();
+  if (!audioContext || audioContext.state === "closed") return;
+  const start = audioContext.currentTime + 0.02;
+  [0, 0.22, 0.44].forEach((offset) => {
+    const oscillator = audioContext.createOscillator();
+    const gain = audioContext.createGain();
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(880, start + offset);
+    gain.gain.setValueAtTime(0.0001, start + offset);
+    gain.gain.exponentialRampToValueAtTime(0.16, start + offset + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + offset + 0.13);
+    oscillator.connect(gain);
+    gain.connect(audioContext.destination);
+    oscillator.start(start + offset);
+    oscillator.stop(start + offset + 0.15);
+  });
+}
+
+function formatDuration(durationMs) {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":")
+    : [minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
+function sessionEndTime() {
+  return state.session.endedAt || Date.now();
+}
+
+function sessionDurationMs() {
+  return state.session.startedAt
+    ? sessionEndTime() - state.session.startedAt
+    : 0;
+}
+
+function overcapacityDurationMs() {
+  const activeDuration = state.session.overcapacityStartedAt
+    ? sessionEndTime() - state.session.overcapacityStartedAt
+    : 0;
+  return state.session.overcapacityDurationMs + activeDuration;
+}
+
+function drawOccupancyChart() {
+  const canvas = elements.occupancyChart;
+  const samples = state.session.samples;
+  const width = Math.max(280, canvas.clientWidth || 320);
+  const height = Math.max(120, canvas.clientHeight || 132);
+  const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = Math.round(width * pixelRatio);
+  canvas.height = Math.round(height * pixelRatio);
+  const context = canvas.getContext("2d");
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  context.clearRect(0, 0, width, height);
+
+  elements.chartEmptyState.hidden = samples.length > 0;
+  if (samples.length === 0) {
+    canvas.setAttribute("aria-label", "No occupancy data yet");
+    return;
+  }
+
+  const styles = getComputedStyle(document.documentElement);
+  const accent = styles.getPropertyValue("--accent").trim();
+  const danger = styles.getPropertyValue("--danger").trim();
+  const muted = styles.getPropertyValue("--muted").trim();
+  const latestCapacity = samples.at(-1).capacity;
+  const maximum = Math.max(1, latestCapacity, ...samples.map((sample) => sample.count));
+  const chartMaximum = Math.max(2, Math.ceil(maximum * 1.15));
+  const padding = { top: 14, right: 12, bottom: 24, left: 28 };
+  const plotWidth = width - padding.left - padding.right;
+  const plotHeight = height - padding.top - padding.bottom;
+  const firstTime = samples[0].timestamp;
+  const lastTime = samples.at(-1).timestamp;
+  const timeSpan = Math.max(1, lastTime - firstTime);
+  const xFor = (sample, index) => samples.length === 1
+    ? padding.left + plotWidth
+    : padding.left + ((sample.timestamp - firstTime) / timeSpan) * plotWidth;
+  const yFor = (count) => padding.top + plotHeight - (count / chartMaximum) * plotHeight;
+
+  context.strokeStyle = "rgba(64, 87, 132, 0.12)";
+  context.lineWidth = 1;
+  for (let line = 0; line <= 2; line += 1) {
+    const y = padding.top + (plotHeight * line) / 2;
+    context.beginPath();
+    context.moveTo(padding.left, y);
+    context.lineTo(width - padding.right, y);
+    context.stroke();
+  }
+
+  const capacityY = yFor(latestCapacity);
+  context.save();
+  context.setLineDash([5, 4]);
+  context.strokeStyle = danger;
+  context.beginPath();
+  context.moveTo(padding.left, capacityY);
+  context.lineTo(width - padding.right, capacityY);
+  context.stroke();
+  context.restore();
+
+  const gradient = context.createLinearGradient(0, padding.top, 0, height - padding.bottom);
+  gradient.addColorStop(0, "rgba(91, 127, 212, 0.32)");
+  gradient.addColorStop(1, "rgba(91, 127, 212, 0.03)");
+  context.beginPath();
+  samples.forEach((sample, index) => {
+    const x = xFor(sample, index);
+    const y = yFor(sample.count);
+    if (index === 0) context.moveTo(x, y);
+    else context.lineTo(x, y);
+  });
+  context.lineTo(xFor(samples.at(-1), samples.length - 1), height - padding.bottom);
+  context.lineTo(xFor(samples[0], 0), height - padding.bottom);
+  context.closePath();
+  context.fillStyle = gradient;
+  context.fill();
+
+  context.beginPath();
+  samples.forEach((sample, index) => {
+    const x = xFor(sample, index);
+    const y = yFor(sample.count);
+    if (index === 0) context.moveTo(x, y);
+    else context.lineTo(x, y);
+  });
+  context.strokeStyle = accent;
+  context.lineWidth = 2.5;
+  context.lineJoin = "round";
+  context.stroke();
+
+  context.fillStyle = muted;
+  context.font = "600 10px Inter, system-ui, sans-serif";
+  context.textAlign = "right";
+  context.fillText(String(chartMaximum), padding.left - 5, padding.top + 4);
+  context.fillText("0", padding.left - 5, height - padding.bottom + 4);
+  context.textAlign = "left";
+  context.fillStyle = danger;
+  context.fillText(`Limit ${latestCapacity}`, padding.left + 5, Math.max(11, capacityY - 4));
+  context.fillStyle = muted;
+  context.fillText("Start", padding.left, height - 7);
+  context.textAlign = "right";
+  context.fillText(formatDuration(lastTime - firstTime), width - padding.right, height - 7);
+
+  canvas.setAttribute(
+    "aria-label",
+    `Occupancy graph with ${samples.length} samples. Maximum ${state.session.maxCount}; current ${samples.at(-1).count}.`,
+  );
+}
+
+function updateSessionUi() {
+  const session = state.session;
+  const averageCount = session.sampleCount
+    ? session.totalCount / session.sampleCount
+    : 0;
+  elements.sessionStateLabel.textContent = !session.startedAt
+    ? "Start the camera to begin a session"
+    : session.endedAt
+      ? "Session ended — report ready"
+      : "Recording on this device";
+  elements.sessionElapsed.textContent = formatDuration(sessionDurationMs());
+  elements.sessionMax.textContent = String(session.maxCount);
+  elements.sessionAverage.textContent = averageCount.toFixed(1);
+  elements.sessionAlerts.textContent = String(session.alertEvents);
+  elements.downloadSessionButton.disabled = session.samples.length === 0;
+  drawOccupancyChart();
+}
+
+function startSession() {
+  state.session = createEmptySession();
+  state.session.startedAt = Date.now();
+  state.currentCapacityStatus = "safe";
+  updateSessionUi();
+}
+
+function finishSession() {
+  const session = state.session;
+  if (!session.startedAt || session.endedAt) return;
+  session.endedAt = Date.now();
+  if (session.overcapacityStartedAt) {
+    session.overcapacityDurationMs += session.endedAt - session.overcapacityStartedAt;
+    session.overcapacityStartedAt = null;
+  }
+  recordHistory("session-end", {
+    capacity: Number(elements.capacityInput.value),
+    status: state.currentCapacityStatus,
+  });
+  updateSessionUi();
+}
+
+function recordSessionSample(count, status, force = false) {
+  const session = state.session;
+  if (!state.running || !session.startedAt || session.endedAt) return;
+  const now = Date.now();
+  const hasChanged = count !== session.lastSampleCount || status !== session.lastSampleStatus;
+  if (!force && !hasChanged && now - session.lastSampleAt < SESSION_SAMPLE_INTERVAL_MS) return;
+  const sample = {
+    timestamp: now,
+    count,
+    capacity: Number(elements.capacityInput.value),
+    status,
+    entered: state.entered,
+    exited: state.exited,
+    fps: Number(elements.fpsValue.textContent) || 0,
+  };
+  session.samples.push(sample);
+  if (session.samples.length > SESSION_POINT_LIMIT) session.samples.shift();
+  session.maxCount = Math.max(session.maxCount, count);
+  session.totalCount += count;
+  session.sampleCount += 1;
+  session.lastSampleAt = now;
+  session.lastSampleCount = count;
+  session.lastSampleStatus = status;
+  updateSessionUi();
+}
+
 function updateCapacity(count) {
   const limit = Number(elements.capacityInput.value);
-  const isAlert = count > limit;
+  const previousStatus = state.currentCapacityStatus;
+  const status = getCapacityStatus(count, limit);
+  const isAlert = status === "over";
   elements.countValue.textContent = String(count);
-  elements.capacityStatus.textContent = isAlert ? "OVER CAPACITY" : "CAPACITY OK";
+  elements.capacityStatus.textContent = status === "over"
+    ? "OVER CAPACITY"
+    : status === "near"
+      ? "NEAR CAPACITY"
+      : "SAFE";
+  elements.sessionCurrentStatus.textContent = elements.capacityStatus.textContent;
+  elements.sessionCurrentStatus.dataset.status = status;
+  elements.capacityMetric.dataset.status = status;
   elements.cameraCard.classList.toggle("is-alert", isAlert);
+  elements.cameraCard.classList.toggle("is-near-capacity", status === "near");
+  elements.capacityAlert.hidden = !isAlert;
+  elements.capacityAlertMessage.textContent = count > limit
+    ? `Room capacity exceeded by ${count - limit} ${count - limit === 1 ? "person" : "people"}.`
+    : `Room has reached its limit of ${limit} ${limit === 1 ? "person" : "people"}.`;
+
+  state.currentCapacityStatus = status;
+  if (state.running && state.session.startedAt && !state.session.endedAt) {
+    const now = Date.now();
+    if (status === "over" && previousStatus !== "over") {
+      state.session.alertEvents += 1;
+      state.session.overcapacityStartedAt = now;
+      recordHistory("overcapacity-start", { capacity: limit, status });
+      playCapacityAlarm();
+    } else if (status !== "over" && previousStatus === "over") {
+      if (state.session.overcapacityStartedAt) {
+        state.session.overcapacityDurationMs +=
+          now - state.session.overcapacityStartedAt;
+        state.session.overcapacityStartedAt = null;
+      }
+      recordHistory("overcapacity-end", { capacity: limit, status });
+    }
+    recordSessionSample(count, status, status !== previousStatus);
+  }
 }
 
 function updateAreaControls() {
@@ -329,6 +667,231 @@ function downloadBlob(blob, filename) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function formatRecordingTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  const pad = (value) => String(value).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  );
+}
+
+function recordingFileTimestamp(timestamp) {
+  return formatRecordingTimestamp(timestamp)
+    .replace(" ", "_")
+    .replaceAll(":", "-");
+}
+
+function getRecordingFormat() {
+  const formats = [
+    { mimeType: "video/webm;codecs=vp9", extension: "webm" },
+    { mimeType: "video/webm;codecs=vp8", extension: "webm" },
+    { mimeType: "video/webm", extension: "webm" },
+    { mimeType: "video/mp4;codecs=avc1.42E01E", extension: "mp4" },
+    { mimeType: "video/mp4", extension: "mp4" },
+  ];
+  return formats.find((format) => MediaRecorder.isTypeSupported(format.mimeType)) || null;
+}
+
+function updateRecordingUi() {
+  const recording = state.recording;
+  const isRecording = Boolean(recording && !recording.stopping);
+  elements.recordingIndicator.hidden = !isRecording;
+  elements.recordButton.classList.toggle("is-recording", isRecording);
+  elements.recordButton.classList.toggle("is-saving", Boolean(recording?.stopping));
+
+  if (!state.recordingSupported) {
+    elements.recordButton.disabled = true;
+    elements.recordButton.title = "Video recording is not supported by this browser";
+    elements.recordButton.innerHTML = "<span aria-hidden=\"true\"></span> Recording unavailable";
+    return;
+  }
+  if (recording?.stopping) {
+    elements.recordButton.disabled = true;
+    elements.recordButton.innerHTML = "<span aria-hidden=\"true\"></span> Saving video...";
+    return;
+  }
+  if (isRecording) {
+    elements.recordButton.disabled = false;
+    elements.recordButton.title = "Stop and download the current recording";
+    elements.recordButton.innerHTML = "<span aria-hidden=\"true\"></span> Stop recording";
+    return;
+  }
+  elements.recordButton.disabled = !state.running;
+  elements.recordButton.title = "Record an annotated video locally";
+  elements.recordButton.innerHTML = "<span aria-hidden=\"true\"></span> Record video";
+  elements.recordingElapsed.textContent = "00:00";
+}
+
+function drawRecordingFrame() {
+  const recording = state.recording;
+  if (!recording || recording.stopping) return;
+  const width = elements.camera.videoWidth;
+  const height = elements.camera.videoHeight;
+  if (width >= MIN_CAMERA_DIMENSION && height >= MIN_CAMERA_DIMENSION) {
+    if (recordingCanvas.width !== width) recordingCanvas.width = width;
+    if (recordingCanvas.height !== height) recordingCanvas.height = height;
+    const context = recordingContext;
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.fillStyle = "#111722";
+    context.fillRect(0, 0, width, height);
+    context.save();
+    if (state.mirrored) {
+      context.translate(width, 0);
+      context.scale(-1, 1);
+    }
+    context.drawImage(elements.camera, 0, 0, width, height);
+    context.restore();
+
+    if (elements.detectionOverlayToggle.checked && elements.overlay.width) {
+      context.drawImage(elements.overlay, 0, 0, width, height);
+    }
+
+    const now = Date.now();
+    const elapsed = now - recording.startedAt;
+    const footerHeight = Math.max(58, Math.round(height * 0.085));
+    const horizontalPadding = Math.max(16, Math.round(width * 0.018));
+    const mainFontSize = Math.max(17, Math.round(height * 0.029));
+    const smallFontSize = Math.max(14, Math.round(height * 0.022));
+    context.fillStyle = "rgba(13, 18, 28, 0.82)";
+    context.fillRect(0, height - footerHeight, width, footerHeight);
+    context.textBaseline = "middle";
+    context.font = `700 ${mainFontSize}px Inter, system-ui, sans-serif`;
+    context.fillStyle = "#ffffff";
+    context.textAlign = "left";
+    context.fillText(
+      formatRecordingTimestamp(now),
+      horizontalPadding,
+      height - footerHeight / 2,
+    );
+    context.textAlign = "right";
+    const statusText = elements.capacityStatus.textContent;
+    const peopleCount = Number(elements.countValue.textContent) || 0;
+    context.fillStyle = state.currentCapacityStatus === "over"
+      ? "#ff7187"
+      : state.currentCapacityStatus === "near"
+        ? "#ffd166"
+        : "#64d693";
+    context.fillText(
+      `People: ${peopleCount}  |  ${statusText}`,
+      width - horizontalPadding,
+      height - footerHeight / 2,
+    );
+
+    context.textAlign = "left";
+    context.font = `800 ${smallFontSize}px Inter, system-ui, sans-serif`;
+    context.fillStyle = "#ff526d";
+    context.fillRect(horizontalPadding, horizontalPadding, smallFontSize * 0.65, smallFontSize * 0.65);
+    context.fillText(
+      `REC  ${formatDuration(elapsed)}`,
+      horizontalPadding + smallFontSize,
+      horizontalPadding + smallFontSize * 0.35,
+    );
+    elements.recordingElapsed.textContent = formatDuration(elapsed);
+  }
+  recording.animationFrame = requestAnimationFrame(drawRecordingFrame);
+}
+
+function finalizeRecording(recording) {
+  if (recording.finalized) return;
+  recording.finalized = true;
+  cancelAnimationFrame(recording.animationFrame);
+  recording.canvasStream.getTracks().forEach((track) => track.stop());
+  const mimeType = recording.recorder.mimeType || recording.format?.mimeType || "video/webm";
+  const extension = mimeType.includes("mp4") ? "mp4" : "webm";
+  const blob = new Blob(recording.chunks, { type: mimeType });
+  if (blob.size > 0) {
+    downloadBlob(
+      blob,
+      `shembot-recording-${recordingFileTimestamp(recording.startedAt)}.${extension}`,
+    );
+  } else {
+    showError("The browser did not produce video data. Try recording again in current Chrome, Edge, or Safari.");
+  }
+  if (state.recording === recording) state.recording = null;
+  updateRecordingUi();
+}
+
+function startRecording() {
+  if (!state.running || state.recording) return;
+  if (!state.recordingSupported) {
+    showError("Video recording is not supported by this browser. Use current Chrome, Edge, or Safari.");
+    return;
+  }
+  const width = elements.camera.videoWidth;
+  const height = elements.camera.videoHeight;
+  if (width < MIN_CAMERA_DIMENSION || height < MIN_CAMERA_DIMENSION) {
+    showError("Wait for the camera preview before starting a recording.");
+    return;
+  }
+
+  clearError();
+  recordingCanvas.width = width;
+  recordingCanvas.height = height;
+  const canvasStream = recordingCanvas.captureStream(20);
+  const format = getRecordingFormat();
+  let recorder;
+  try {
+    recorder = new MediaRecorder(
+      canvasStream,
+      format
+        ? { mimeType: format.mimeType, videoBitsPerSecond: 3_000_000 }
+        : { videoBitsPerSecond: 3_000_000 },
+    );
+  } catch (error) {
+    canvasStream.getTracks().forEach((track) => track.stop());
+    showError(`Recording could not start: ${error?.message || "unsupported video format"}.`);
+    return;
+  }
+
+  const recording = {
+    recorder,
+    canvasStream,
+    format,
+    chunks: [],
+    startedAt: Date.now(),
+    animationFrame: 0,
+    stopping: false,
+    finalized: false,
+  };
+  state.recording = recording;
+  recorder.addEventListener("dataavailable", (event) => {
+    if (event.data?.size) recording.chunks.push(event.data);
+  });
+  recorder.addEventListener("error", (event) => {
+    showError(`Recording error: ${event.error?.message || "the browser stopped recording"}.`);
+    if (!recording.stopping) stopRecording();
+  });
+  recorder.addEventListener("stop", () => finalizeRecording(recording), { once: true });
+  try {
+    recorder.start(1000);
+  } catch (error) {
+    state.recording = null;
+    canvasStream.getTracks().forEach((track) => track.stop());
+    showError(`Recording could not start: ${error?.message || "browser recording error"}.`);
+    updateRecordingUi();
+    return;
+  }
+  recordHistory("video-recording-start", {
+    recordingStartedAt: new Date(recording.startedAt).toISOString(),
+  });
+  updateRecordingUi();
+  drawRecordingFrame();
+}
+
+function stopRecording() {
+  const recording = state.recording;
+  if (!recording || recording.stopping) return;
+  recording.stopping = true;
+  cancelAnimationFrame(recording.animationFrame);
+  recordHistory("video-recording-end", {
+    recordingDurationSeconds: Math.round((Date.now() - recording.startedAt) / 1000),
+  });
+  updateRecordingUi();
+  if (recording.recorder.state === "inactive") finalizeRecording(recording);
+  else recording.recorder.stop();
+}
+
 function downloadHistoryCsv() {
   if (state.history.length === 0) return;
   const columns = [
@@ -349,6 +912,72 @@ function downloadHistoryCsv() {
   downloadBlob(
     new Blob([csv], { type: "text/csv;charset=utf-8" }),
     `crowd-history-${new Date().toISOString().slice(0, 10)}.csv`,
+  );
+}
+
+function downloadSessionReport() {
+  const session = state.session;
+  if (!session.startedAt || session.samples.length === 0) return;
+  const endedAt = sessionEndTime();
+  const averageCount = session.sampleCount
+    ? session.totalCount / session.sampleCount
+    : 0;
+  const sessionEvents = state.history.filter((record) => {
+    const timestamp = Date.parse(record.timestamp);
+    return timestamp >= session.startedAt && timestamp <= endedAt;
+  });
+  const lines = [
+    ["SHEMBOT SESSION REPORT"],
+    ["Generated", new Date().toISOString()],
+    ["Session start", new Date(session.startedAt).toISOString()],
+    ["Session end", new Date(endedAt).toISOString()],
+    ["Duration", formatDuration(endedAt - session.startedAt)],
+    ["Room capacity", Number(elements.capacityInput.value)],
+    ["Maximum occupancy", session.maxCount],
+    ["Average occupancy", averageCount.toFixed(2)],
+    ["Overcapacity events", session.alertEvents],
+    ["Overcapacity duration", formatDuration(overcapacityDurationMs())],
+    ["Total entries", state.entered],
+    ["Total exits", state.exited],
+    ["Detector model", state.detectorModelName],
+    ["Privacy", "Camera frames were processed locally and were not included in this report."],
+    ["Note", "Box percentages are detection confidence, not system accuracy."],
+    [],
+    ["OCCUPANCY SAMPLES"],
+    ["timestamp", "count", "capacity", "status", "entered", "exited", "fps"],
+    ...session.samples.map((sample) => [
+      new Date(sample.timestamp).toISOString(),
+      sample.count,
+      sample.capacity,
+      sample.status,
+      sample.entered,
+      sample.exited,
+      sample.fps.toFixed(1),
+    ]),
+    [],
+    ["SESSION EVENTS"],
+    ["timestamp", "event", "count", "capacity", "status", "entered", "exited", "quality"],
+    ...sessionEvents.map((record) => [
+      record.timestamp,
+      record.event,
+      record.count,
+      record.capacity,
+      record.status,
+      record.entered,
+      record.exited,
+      record.quality,
+    ]),
+  ];
+  const csv = lines
+    .map((row) => row.map((value) => csvValue(value)).join(","))
+    .join("\n");
+  const fileTimestamp = new Date(session.startedAt)
+    .toISOString()
+    .replaceAll(":", "-")
+    .replace(".000Z", "Z");
+  downloadBlob(
+    new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }),
+    `shembot-session-${fileTimestamp}.csv`,
   );
 }
 
@@ -406,7 +1035,7 @@ function saveFeedback(isCorrect) {
     downloadBlob(blob, `${fileStem}.jpg`);
   }, "image/jpeg", 0.92);
   const metadata = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     timestamp,
     image: `${fileStem}.jpg`,
     width,
@@ -416,6 +1045,12 @@ function saveFeedback(isCorrect) {
     mirrored: state.mirrored,
     rotation: state.rotation,
     detectionArea: state.area,
+    detectorModel: state.detectorModelName,
+    pipeline: { ...state.pipelineStats },
+    thresholds: {
+      poseAssisted: POSE_ASSISTED_SCORE_FLOOR,
+      detectorOnly: DETECTOR_ONLY_SCORE_FLOOR,
+    },
     detections: state.lastConfirmedTracks.map((track) => ({
       id: track.id,
       bbox: track.bbox.map((value) => Math.round(value * 100) / 100),
@@ -445,6 +1080,13 @@ function resetTracking() {
   state.scanDetections = [];
   state.lastPoseVerificationAt = -Infinity;
   state.lastPoseDetections = [];
+  updatePipelineDiagnostics({
+    raw: 0,
+    plausible: 0,
+    poseMatched: 0,
+    candidates: 0,
+    tracked: 0,
+  });
   updateCapacity(0);
 }
 
@@ -866,7 +1508,7 @@ function safelyDetectPoses(frame, scanArea) {
     return poseResultToDetections(result, frame, scanArea);
   } catch (error) {
     console.warn(
-      "Automatic pose verification stopped; counting is disabled.",
+      "Automatic pose verification stopped; continuing with detector tracking.",
       error,
     );
     try {
@@ -875,12 +1517,10 @@ function safelyDetectPoses(frame, scanArea) {
       // The failed task may already be closed.
     }
     state.poseLandmarker = null;
-    state.tracks = [];
-    state.lastConfirmedTracks = [];
-    state.countHistory = [];
-    updateCapacity(0);
+    state.lastPoseDetections = [];
+    elements.poseStatusTag.textContent = "TRACK";
     showError(
-      "Person verification stopped. Open this page directly in current Chrome or Safari, then reload it.",
+      "Pose assistance stopped. Counting continues with persistent detector tracks; open this page directly in current Chrome or Safari for best results.",
     );
     return [];
   }
@@ -1048,8 +1688,8 @@ function boxesAreDuplicate(first, second) {
     Math.max(1, Math.min(firstArea, secondArea));
   const containment = intersectionOverSmaller(first, second);
   if (
-    overlap >= 0.45 ||
-    (areaRatio <= 2.5 && containment >= 0.65)
+    overlap >= 0.55 ||
+    (areaRatio <= 2.2 && containment >= 0.72)
   ) {
     return true;
   }
@@ -1058,7 +1698,7 @@ function boxesAreDuplicate(first, second) {
   // box. Treat a nearly contained box as the same person even when their
   // areas differ substantially.
   if (
-    containment >= 0.88 &&
+    containment >= 0.92 &&
     (centerIsInside(first, second) || centerIsInside(second, first))
   ) {
     return true;
@@ -1079,10 +1719,10 @@ function boxesAreDuplicate(first, second) {
       Math.hypot(second[2], second[3]),
     ),
   );
-  if (containment >= 0.85 && distance < smallerDiagonal * 0.45) {
+  if (containment >= 0.9 && distance < smallerDiagonal * 0.4) {
     return true;
   }
-  return distance < smallerDiagonal * 0.22;
+  return distance < smallerDiagonal * 0.16;
 }
 
 function detectionsCorrespond(first, second) {
@@ -1121,12 +1761,15 @@ function poseMatchQuality(detection, pose) {
   return overlap * 2 + containment + proximity * 0.5;
 }
 
-function matchVerifiedPeople(people, poses, frame) {
-  // Count only candidates supported by both models. One detector box may be
-  // used once, preventing several pose hypotheses from creating duplicate
-  // tracks for one person or one person-like object.
+function attachPoseEvidence(people, poses, frame) {
+  // Pose is supporting evidence, not a hard gate. Each detector candidate is
+  // retained, while a one-to-one pose match can confirm it immediately.
   const availableDetections = new Set(people.map((_, index) => index));
-  const verified = [];
+  const candidates = people.map((detection) => ({
+    ...detection,
+    verifiedByPose: false,
+    poseScore: null,
+  }));
   const uniquePoses = [];
 
   for (const pose of [...poses].sort((first, second) => second.score - first.score)) {
@@ -1147,22 +1790,22 @@ function matchVerifiedPeople(people, poses, frame) {
     }
     if (bestIndex < 0) continue;
 
-    const detection = people[bestIndex];
+    const detection = candidates[bestIndex];
     availableDetections.delete(bestIndex);
-    verified.push({
+    candidates[bestIndex] = {
       ...detection,
       // Pose boxes surround only visible landmarks and can shrink to a body
       // part. Keep the detector's full-person box after pose verification.
       bbox: [...detection.bbox],
-      score: Math.min(detection.score, pose.score),
+      poseScore: pose.score,
       relativeScanArea: boxArea(detection.bbox) /
         Math.max(1, frame.sourceWidth * frame.sourceHeight),
       edgeCropped: false,
       verifiedByPose: true,
-    });
+    };
   }
 
-  return verified;
+  return candidates;
 }
 
 function consolidateDetections(detections) {
@@ -1233,7 +1876,7 @@ function updateTracks(detections, now) {
       bestTrack.missedCycles = 0;
       bestTrack.lastSeen = now;
       if (detection.verifiedByPose) bestTrack.confirmed = true;
-      const requiredHits = bestTrack.maxScore >= 0.75 ? 3 : 4;
+      const requiredHits = bestTrack.maxScore >= DETECTOR_ONLY_FAST_SCORE ? 2 : 3;
       if (bestTrack.hits >= requiredHits) bestTrack.confirmed = true;
       unmatchedTracks.delete(bestTrack.id);
     } else {
@@ -1515,11 +2158,11 @@ function detectLoop(token) {
 
     state.scanIndex = (state.scanIndex + 1) % scanAreas.length;
 
-    const minimumScore = scanArea?.kind === "full"
-      ? (state.poseLandmarker ? 0.26 : FULL_FRAME_SCORE_FLOOR)
-      : (state.poseLandmarker ? 0.26 : ZOOMED_SCORE_FLOOR);
-    const people = (result.detections || [])
-      .filter((detection) => isPlausiblePerson(detection, frame, minimumScore))
+    const rawDetections = result.detections || [];
+    const people = rawDetections
+      .filter((detection) =>
+        isPlausiblePerson(detection, frame, POSE_ASSISTED_SCORE_FLOOR)
+      )
       .map((detection) => {
         const category = getCategory(detection);
         const bbox = mapBoxToVideo(detection.boundingBox, frame);
@@ -1559,10 +2202,25 @@ function detectLoop(token) {
       state.lastPoseVerificationAt = now;
       state.lastPoseDetections = poseDetections;
     }
-    const verifiedPeople = poseWasAvailable && state.poseLandmarker
-      ? matchVerifiedPeople(people, poseDetections, frame)
-      : [];
-    state.scanDetections.push(...verifiedPeople);
+    const candidatesWithPose = poseWasAvailable && state.poseLandmarker
+      ? attachPoseEvidence(people, poseDetections, frame)
+      : people.map((detection) => ({
+        ...detection,
+        verifiedByPose: false,
+        poseScore: null,
+      }));
+    const countCandidates = candidatesWithPose.filter((detection) =>
+      detection.verifiedByPose || detection.score >= DETECTOR_ONLY_SCORE_FLOOR
+    );
+    state.scanDetections.push(...countCandidates);
+    updatePipelineDiagnostics({
+      raw: rawDetections.length,
+      plausible: people.length,
+      poseMatched: candidatesWithPose.filter(
+        (detection) => detection.verifiedByPose,
+      ).length,
+      candidates: countCandidates.length,
+    });
     const scanCycleComplete = state.scanIndex === 0;
     let confirmedTracks = consolidateDetections(
       state.tracks.filter((track) => track.confirmed),
@@ -1579,6 +2237,7 @@ function detectLoop(token) {
       state.countHistory = [confirmedTracks.length];
       const displayedCount = confirmedTracks.length;
       updateCapacity(displayedCount);
+      updatePipelineDiagnostics({ tracked: displayedCount });
       recordCountHistory(displayedCount);
       updateFlowTracking(confirmedTracks, startedAt);
     }
@@ -1625,6 +2284,7 @@ async function requestWakeLock() {
 
 async function startCamera() {
   clearError();
+  prepareAlertAudio();
   if (!navigator.mediaDevices?.getUserMedia) {
     showError("Camera access is unavailable. Open this site in a current browser over HTTPS.");
     return;
@@ -1634,8 +2294,8 @@ async function startCamera() {
     state.stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: state.facingMode },
-        width: { ideal: 640 },
-        height: { ideal: 480 },
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
         frameRate: { ideal: 24, max: 30 },
       },
       audio: false,
@@ -1651,7 +2311,12 @@ async function startCamera() {
     state.detectionRecovering = false;
     state.lastVideoTime = -1;
     state.lastCalibrationAt = performance.now();
+    startSession();
     resetTracking();
+    recordHistory("session-start", {
+      capacity: Number(elements.capacityInput.value),
+      status: state.currentCapacityStatus,
+    });
     elements.emptyState.hidden = true;
     elements.hud.hidden = false;
     elements.flipButton.disabled = false;
@@ -1663,6 +2328,7 @@ async function startCamera() {
     elements.startButton.classList.add("is-running");
     elements.startButton.innerHTML =
       '<span class="button-icon">&#9632;</span> Stop camera';
+    updateRecordingUi();
     updateAppStatus("Camera live", "live");
     updateAreaControls();
     await requestWakeLock();
@@ -1689,6 +2355,8 @@ function stopAreaSelection() {
 }
 
 function stopCamera() {
+  if (state.recording) stopRecording();
+  if (state.running) finishSession();
   state.running = false;
   state.consecutiveDetectionErrors = 0;
   state.detectionRecovering = false;
@@ -1703,8 +2371,7 @@ function stopCamera() {
     elements.overlay.width,
     elements.overlay.height,
   );
-  state.lastConfirmedTracks = [];
-  state.flowTracks.clear();
+  resetTracking();
   elements.hud.hidden = true;
   elements.emptyState.hidden = false;
   elements.flipButton.disabled = true;
@@ -1716,6 +2383,7 @@ function stopCamera() {
   elements.startButton.classList.remove("is-running");
   elements.startButton.innerHTML =
     '<span class="button-icon">&#9679;</span> Start camera';
+  updateRecordingUi();
   updateAppStatus("Ready", "ready");
   elements.cameraCard.classList.remove("is-alert");
   updateQualityUi(
@@ -1847,6 +2515,10 @@ elements.startButton.addEventListener("click", () => {
   if (state.running) stopCamera();
   else startCamera();
 });
+elements.recordButton.addEventListener("click", () => {
+  if (state.recording) stopRecording();
+  else startRecording();
+});
 elements.flipButton.addEventListener("click", flipCamera);
 elements.sidebarFlipButton.addEventListener("click", flipCamera);
 elements.setAreaButton.addEventListener("click", startAreaSelection);
@@ -1857,6 +2529,11 @@ elements.capacityInput.addEventListener("input", () => {
   elements.capacityOutput.textContent =
     elements.capacityInput.value + " people";
   updateCapacity(Number(elements.countValue.textContent));
+});
+elements.alertSoundToggle.addEventListener("change", () => {
+  state.alertSoundEnabled = elements.alertSoundToggle.checked;
+  localStorage.setItem("alertSoundEnabled", String(state.alertSoundEnabled));
+  if (state.alertSoundEnabled) prepareAlertAudio();
 });
 elements.correctFeedbackButton.addEventListener("click", () => saveFeedback(true));
 elements.issueFeedbackButton.addEventListener("click", () => saveFeedback(false));
@@ -1889,6 +2566,7 @@ elements.resetFlowButton.addEventListener("click", () => {
   recordHistory("flow-reset");
 });
 elements.downloadHistoryButton.addEventListener("click", downloadHistoryCsv);
+elements.downloadSessionButton.addEventListener("click", downloadSessionReport);
 elements.clearHistoryButton.addEventListener("click", () => {
   state.history = [];
   state.lastLoggedCount = null;
@@ -1977,7 +2655,10 @@ elements.zoneSelection.addEventListener("pointermove", (event) => {
 elements.zoneSelection.addEventListener("pointerup", finishAreaSelection);
 elements.zoneSelection.addEventListener("pointercancel", stopAreaSelection);
 
-window.addEventListener("resize", syncCanvas);
+window.addEventListener("resize", () => {
+  syncCanvas();
+  drawOccupancyChart();
+});
 window.addEventListener("orientationchange", handleOrientationChange);
 screen.orientation?.addEventListener("change", handleOrientationChange);
 
@@ -1995,9 +2676,12 @@ document.addEventListener("visibilitychange", async () => {
 window.addEventListener("beforeunload", stopCamera);
 if (!Array.isArray(state.history)) state.history = [];
 localStorage.setItem("crowdCountHistory", JSON.stringify(state.history));
+elements.alertSoundToggle.checked = state.alertSoundEnabled;
 updateAreaControls();
 updateFlowUi();
 updateHistoryUi();
+updateSessionUi();
+updateRecordingUi();
 loadModel();
 
 async function createDetector(vision, delegate, modelAssetPath = MODEL_PATH) {
@@ -2007,7 +2691,7 @@ async function createDetector(vision, delegate, modelAssetPath = MODEL_PATH) {
       delegate,
     },
     runningMode: "VIDEO",
-    scoreThreshold: 0.18,
+    scoreThreshold: POSE_ASSISTED_SCORE_FLOOR,
     maxResults: 50,
     categoryAllowlist: ["person"],
   });
@@ -2020,7 +2704,7 @@ async function createPoseLandmarker(vision, delegate) {
       delegate,
     },
     runningMode: "IMAGE",
-    numPoses: 15,
+    numPoses: MAX_POSES,
     minPoseDetectionConfidence: 0.35,
     minPosePresenceConfidence: 0.35,
     outputSegmentationMasks: false,
@@ -2045,7 +2729,7 @@ async function loadModel() {
         state.poseLandmarker = await createPoseLandmarker(vision, "CPU");
       } catch (poseError) {
         console.warn(
-          "Pose verification unavailable; counting is disabled.",
+          "Pose assistance unavailable; using persistent detector tracking.",
           poseError,
         );
         state.poseLandmarker = null;
@@ -2054,15 +2738,17 @@ async function loadModel() {
 
     if (!state.poseLandmarker) {
       elements.modelLoading.hidden = true;
-      elements.startButton.disabled = true;
-      elements.modelStatus.textContent = "Person verifier unavailable";
-      updateAppStatus("Use Chrome or Safari", "error");
+      elements.startButton.disabled = false;
+      elements.poseStatusTag.textContent = "TRACK";
+      elements.modelStatus.textContent = "Detector ready; pose assist unavailable";
+      updateAppStatus("Ready (tracking only)", "ready");
       showError(
-        "Strict person verification is unavailable in this browser. Open the link directly in current Chrome or Safari and reload it.",
+        "Pose assistance is unavailable. Counting will use persistent detector tracks; open the link directly in current Chrome or Safari for best results.",
       );
       return;
     }
 
+    elements.poseStatusTag.textContent = "ASSIST";
     elements.modelLoading.hidden = true;
     elements.startButton.disabled = false;
     updateAppStatus("Ready", "ready");
