@@ -8,7 +8,7 @@ import {
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
   selectDistinctSplitPair,
-} from "./detection_geometry.js";
+} from "./detection_geometry.js?v=20261124-image6";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",

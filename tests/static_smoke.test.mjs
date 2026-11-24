@@ -128,6 +128,7 @@ assert.match(app, /multiPersonDetections/);
 assert.match(app, /function refineMergedImageCandidates/);
 assert.match(app, /selectDistinctSplitPair/);
 assert.match(app, /recoveredFromMergedBox/);
+assert.match(app, /detection_geometry\.js\?v=20261124-image6/);
 assert.match(app, /strongStandalonePose/);
 assert.match(app, /haveDistinctPoseIdentities/);
 assert.match(app, /Reduce occupancy by at least/);
