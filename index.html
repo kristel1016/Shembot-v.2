@@ -34,7 +34,7 @@
       });
       window.addEventListener('resize', syncWorkspaceScale, { passive: true });
     </script>
-    <script defer src="./src/js/boot.js?v=20261124-image1"></script>
+    <script defer src="./src/js/boot.js?v=20261124-image2"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -362,7 +362,7 @@
           <div class="image-analysis-progress" id="imageAnalysisProgress" role="status" hidden>
             <span class="spinner"></span>
             <strong>Analyzing people in the image...</strong>
-            <small>Running full-image and zoomed scans.</small>
+            <small>Running crowd-optimized full-image and zoomed scans.</small>
           </div>
 
           <p class="image-analysis-error" id="imageAnalysisError" role="alert" hidden></p>
@@ -372,7 +372,7 @@
               <canvas class="image-result-canvas" id="imageResultCanvas" width="960" height="540" aria-label="Annotated uploaded image"></canvas>
             </div>
             <div class="image-result-summary">
-              <span><small>People detected</small><strong id="imagePeopleCount">0</strong></span>
+              <span><small>Estimated people</small><strong id="imagePeopleCount">0</strong></span>
               <span><small>Room status</small><strong id="imageCapacityStatus" data-status="safe">SAFE</strong></span>
               <span><small>Processing</small><strong id="imageProcessingTime">0 ms</strong></span>
             </div>

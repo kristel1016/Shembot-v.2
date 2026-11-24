@@ -22,9 +22,15 @@ export function looksLikeSamePersonAcrossScales(first, second) {
   if (firstHasPose && secondHasPose) return false;
 
   const crossScan =
-    typeof first.fromFullScan === "boolean" &&
-    typeof second.fromFullScan === "boolean" &&
-    first.fromFullScan !== second.fromFullScan;
+    (
+      typeof first.scanId === "string" &&
+      typeof second.scanId === "string" &&
+      first.scanId !== second.scanId
+    ) || (
+      typeof first.fromFullScan === "boolean" &&
+      typeof second.fromFullScan === "boolean" &&
+      first.fromFullScan !== second.fromFullScan
+    );
   if (!crossScan && firstHasPose === secondHasPose) return false;
 
   const horizontalIntersection = Math.max(

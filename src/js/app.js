@@ -28,6 +28,8 @@ const MAX_CONFIRMED_MISSED_CYCLES = 10;
 const POSE_ASSISTED_SCORE_FLOOR = 0.18;
 const DETECTOR_ONLY_SCORE_FLOOR = 0.50;
 const DETECTOR_ONLY_FAST_SCORE = 0.68;
+const IMAGE_PROPOSAL_SCORE_FLOOR = 0.15;
+const IMAGE_DETECTOR_SCORE_FLOOR = 0.25;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const POSE_VERIFICATION_INTERVAL_MS = 420;
 const POSE_CACHE_MS = 1600;
@@ -1058,17 +1060,29 @@ async function decodeImageFile(file) {
 }
 
 function imageScanAreas(width, height) {
-  const tileFraction = 0.64;
+  const tileFraction = 0.52;
   const tileWidth = Math.max(1, Math.round(width * tileFraction));
   const tileHeight = Math.max(1, Math.round(height * tileFraction));
   const right = Math.max(0, width - tileWidth);
   const bottom = Math.max(0, height - tileHeight);
+  const xPositions = [0, Math.round(right / 2), right];
+  const yPositions = [0, Math.round(bottom / 2), bottom];
+  const tiles = [];
+  yPositions.forEach((y, row) => {
+    xPositions.forEach((x, column) => {
+      tiles.push({
+        x,
+        y,
+        width: tileWidth,
+        height: tileHeight,
+        kind: "tile",
+        scanId: `tile-${row}-${column}`,
+      });
+    });
+  });
   return [
-    { x: 0, y: 0, width, height, kind: "full" },
-    { x: 0, y: 0, width: tileWidth, height: tileHeight, kind: "tile" },
-    { x: right, y: 0, width: tileWidth, height: tileHeight, kind: "tile" },
-    { x: 0, y: bottom, width: tileWidth, height: tileHeight, kind: "tile" },
-    { x: right, y: bottom, width: tileWidth, height: tileHeight, kind: "tile" },
+    { x: 0, y: 0, width, height, kind: "full", scanId: "full" },
+    ...tiles,
   ];
 }
 
@@ -1078,16 +1092,9 @@ async function getImageDetector() {
   if (!state.vision) throw new Error("The person detector is still loading.");
 
   state.imageDetectorPromise = (async () => {
-    const preferredModel = state.detectorModelName === "generic"
-      ? FALLBACK_MODEL_PATH
-      : MODEL_PATH;
-    try {
-      return await createImageDetector(state.vision, "CPU", preferredModel);
-    } catch (preferredError) {
-      if (preferredModel === FALLBACK_MODEL_PATH) throw preferredError;
-      console.warn("Optimized image detector unavailable; using compatible model.", preferredError);
-      return createImageDetector(state.vision, "CPU", FALLBACK_MODEL_PATH);
-    }
+    // Uploaded photos can contain distant, public-scene people unlike the
+    // close phone-camera domain. Use the broader COCO model for this mode.
+    return createImageDetector(state.vision, "CPU", FALLBACK_MODEL_PATH);
   })();
 
   try {
@@ -1159,7 +1166,7 @@ function renderAnalyzedImage(detections, processingMs) {
   context.textAlign = "left";
   context.fillStyle = "#ffffff";
   context.fillText(
-    `People detected: ${detections.length}`,
+    `Estimated people: ${detections.length}`,
     Math.max(14, width * 0.018),
     bannerHeight / 2,
   );
@@ -1183,7 +1190,7 @@ function renderAnalyzedImage(detections, processingMs) {
     ? `${detections.map((detection, index) =>
       `P${index + 1}: ${Math.round(detection.score * 100)}% confidence`
     ).join(" • ")}. Confidence is not system accuracy.`
-    : "No people passed the high-precision threshold in this image.";
+    : "No people passed the crowd-image threshold. Try a clearer or higher-resolution image.";
 }
 
 async function analyzeImageFile(file) {
@@ -1236,7 +1243,7 @@ async function analyzeImageFile(file) {
       const frame = imageFrame(area.width, area.height);
       const result = detector.detect(imageScanCanvas);
       for (const detection of result.detections || []) {
-        if (!isPlausiblePerson(detection, frame, POSE_ASSISTED_SCORE_FLOOR)) continue;
+        if (!isPlausiblePerson(detection, frame, IMAGE_PROPOSAL_SCORE_FLOOR)) continue;
         const category = getCategory(detection);
         const box = detection.boundingBox;
         candidates.push({
@@ -1248,6 +1255,7 @@ async function analyzeImageFile(file) {
           ],
           score: category.score,
           fromFullScan: area.kind === "full",
+          scanId: area.scanId,
           relativeScanArea: (box.width * box.height) / Math.max(1, width * height),
           edgeCropped: false,
         });
@@ -1277,7 +1285,7 @@ async function analyzeImageFile(file) {
       }));
     const detections = consolidateDetections(
       withPoseEvidence.filter((candidate) =>
-        candidate.verifiedByPose || candidate.score >= DETECTOR_ONLY_SCORE_FLOOR
+        candidate.verifiedByPose || candidate.score >= IMAGE_DETECTOR_SCORE_FLOOR
       ),
     );
     const processingMs = performance.now() - startedAt;
@@ -3071,7 +3079,7 @@ async function createImageDetector(
       delegate,
     },
     runningMode: "IMAGE",
-    scoreThreshold: POSE_ASSISTED_SCORE_FLOOR,
+    scoreThreshold: IMAGE_PROPOSAL_SCORE_FLOOR,
     maxResults: 50,
     categoryAllowlist: ["person"],
   });

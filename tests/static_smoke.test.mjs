@@ -77,6 +77,8 @@ assert.match(app, /function attachPoseEvidence/);
 assert.match(app, /DETECTOR_ONLY_SCORE_FLOOR/);
 assert.match(app, /DETECTOR_ONLY_FAST_SCORE/);
 assert.match(app, /DETECTOR_ONLY_SCORE_FLOOR\s*=\s*0\.50/);
+assert.match(app, /IMAGE_DETECTOR_SCORE_FLOOR\s*=\s*0\.25/);
+assert.match(app, /IMAGE_PROPOSAL_SCORE_FLOOR\s*=\s*0\.15/);
 assert.match(app, /TRACK_HOLD_MS\s*=\s*3500/);
 assert.match(app, /looksLikeSamePersonAcrossScales/);
 assert.match(app, /detection\.verifiedByPose\s*\|\|\s*detection\.score/);
@@ -111,6 +113,9 @@ assert.match(app, /function renderAnalyzedImage/);
 assert.match(app, /function downloadAnalyzedImage/);
 assert.match(app, /runningMode:\s*"IMAGE"/);
 assert.match(app, /imageScanAreas/);
+assert.match(app, /xPositions\s*=\s*\[0, Math\.round\(right \/ 2\), right\]/);
+assert.match(app, /createImageDetector\(state\.vision, "CPU", FALLBACK_MODEL_PATH\)/);
+assert.match(app, /candidate\.score >= IMAGE_DETECTOR_SCORE_FLOOR/);
 assert.match(app, /image\/jpeg.*image\/png.*image\/webp/s);
 
 const screenshotUpperBody = {
@@ -145,6 +150,14 @@ assert.equal(
   ),
   false,
   "two independently pose-supported boxes should remain separate",
+);
+assert.equal(
+  looksLikeSamePersonAcrossScales(
+    { ...screenshotUpperBody, fromFullScan: false, scanId: "tile-0-0" },
+    { ...screenshotLowerBody, verifiedByPose: false, fromFullScan: false, scanId: "tile-1-0" },
+  ),
+  true,
+  "aligned duplicates from different image tiles should merge",
 );
 
 console.log(`SHEMBOT checkpoint smoke test passed (${requiredFiles.length} assets).`);
