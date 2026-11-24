@@ -52,6 +52,7 @@ for (const id of [
   "imageRecommendationTitle",
   "imageRecommendationMessage",
   "imageCorrectionHint",
+  "imageCorrectionTarget",
   "addMissedPersonButton",
   "splitDetectionButton",
   "removeDetectionButton",
@@ -90,7 +91,7 @@ assert.match(app, /function attachPoseEvidence/);
 assert.match(app, /DETECTOR_ONLY_SCORE_FLOOR/);
 assert.match(app, /DETECTOR_ONLY_FAST_SCORE/);
 assert.match(app, /DETECTOR_ONLY_SCORE_FLOOR\s*=\s*0\.50/);
-assert.match(app, /IMAGE_DETECTOR_SCORE_FLOOR\s*=\s*0\.30/);
+assert.match(app, /IMAGE_DETECTOR_SCORE_FLOOR\s*=\s*0\.34/);
 assert.match(app, /IMAGE_PROPOSAL_SCORE_FLOOR\s*=\s*0\.15/);
 assert.match(app, /TRACK_HOLD_MS\s*=\s*2400/);
 assert.match(app, /DISPLAY_TRACK_HOLD_MS\s*=\s*850/);
@@ -143,11 +144,13 @@ assert.match(app, /imageScanAreas/);
 assert.match(app, /xPositions\s*=\s*\[0, Math\.round\(right \/ 2\), right\]/);
 assert.match(app, /createImageDetector\(state\.vision, "CPU", FALLBACK_MODEL_PATH\)/);
 assert.match(app, /candidate\.score >= IMAGE_DETECTOR_SCORE_FLOOR/);
+assert.match(app, /function hasIndependentImageSupport/);
+assert.match(app, /IMAGE_UNSUPPORTED_SCORE_FLOOR\s*=\s*0\.42/);
 assert.match(app, /multiPersonDetections/);
 assert.match(app, /function refineMergedImageCandidates/);
 assert.match(app, /selectDistinctSplitPair/);
 assert.match(app, /recoveredFromMergedBox/);
-assert.match(app, /detection_geometry\.js\?v=20261124-ops2/);
+assert.match(app, /detection_geometry\.js\?v=20261124-ops3/);
 assert.match(app, /function motionAwareTrackMatchScore/);
 assert.match(app, /function canReacquireMovingTrack/);
 assert.match(app, /function isTrackVisible/);
@@ -159,9 +162,9 @@ assert.match(app, /lastPoseSeenAt/);
 assert.match(app, /const stableTrack = track\.hits >= 4/);
 assert.match(app, /function detailedCrowdScanAreas/);
 assert.match(app, /function appendImageScanDetections/);
-assert.match(app, /IMAGE_DETAIL_SCORE_FLOOR\s*=\s*0\.26/);
+assert.match(app, /IMAGE_DETAIL_SCORE_FLOOR\s*=\s*0\.28/);
 assert.match(app, /groupedScanIds/);
-assert.match(app, /ObjectDetector already suppresses duplicate boxes within one scan/);
+assert.match(app, /contained torso\/full-body duplicate/);
 assert.match(app, /function applyImageCorrection/);
 assert.match(app, /function suggestedManualBoxSize/);
 assert.match(app, /manualCorrection:\s*"added"/);
@@ -169,6 +172,7 @@ assert.match(app, /manualCorrection:\s*"split"/);
 assert.match(app, /function undoImageCorrection/);
 assert.match(app, /scrollIntoView/);
 assert.match(app, /imageResultCanvas\.addEventListener\("click", applyImageCorrection\)/);
+assert.match(app, /imageResultCanvas\.addEventListener\("pointerup", applyImageCorrection\)/);
 assert.match(app, /strongStandalonePose/);
 assert.match(app, /haveDistinctPoseIdentities/);
 assert.match(app, /Stop entry and move at least/);

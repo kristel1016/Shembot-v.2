@@ -8,7 +8,7 @@ import {
   haveDistinctPoseIdentities,
   looksLikeSamePersonAcrossScales,
   selectDistinctSplitPair,
-} from "./detection_geometry.js?v=20261124-ops2";
+} from "./detection_geometry.js?v=20261124-ops3";
 
 const MEDIAPIPE_WASM = new URL(
   "../../lib/mediapipe/wasm",
@@ -40,8 +40,9 @@ const DETECTOR_ONLY_FAST_SCORE = 0.64;
 const DETECTOR_ONLY_INSTANT_SCORE = 0.78;
 const MOTION_REACQUIRE_SCORE_FLOOR = 0.28;
 const IMAGE_PROPOSAL_SCORE_FLOOR = 0.15;
-const IMAGE_DETECTOR_SCORE_FLOOR = 0.30;
-const IMAGE_DETAIL_SCORE_FLOOR = 0.26;
+const IMAGE_DETECTOR_SCORE_FLOOR = 0.34;
+const IMAGE_DETAIL_SCORE_FLOOR = 0.28;
+const IMAGE_UNSUPPORTED_SCORE_FLOOR = 0.42;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const POSE_VERIFICATION_INTERVAL_MS = 420;
 const POSE_CACHE_MS = 650;
@@ -83,6 +84,9 @@ const elements = {
   imageAnalysisError: document.querySelector("#imageAnalysisError"),
   imageAnalysisResult: document.querySelector("#imageAnalysisResult"),
   imageResultCanvas: document.querySelector("#imageResultCanvas"),
+  imageCorrectionTarget: document.querySelector("#imageCorrectionTarget"),
+  imageCorrectionTargetTitle: document.querySelector("#imageCorrectionTargetTitle"),
+  imageCorrectionTargetText: document.querySelector("#imageCorrectionTargetText"),
   imagePeopleCount: document.querySelector("#imagePeopleCount"),
   imageCapacityStatus: document.querySelector("#imageCapacityStatus"),
   imageProcessingTime: document.querySelector("#imageProcessingTime"),
@@ -1475,29 +1479,37 @@ function renderAnalyzedImage(detections, processingMs) {
 function updateImageCorrectionUi() {
   const mode = state.imageCorrectionMode;
   const buttonModes = [
-    [elements.addMissedPersonButton, "add"],
-    [elements.splitDetectionButton, "split"],
-    [elements.removeDetectionButton, "remove"],
+    [elements.addMissedPersonButton, "add", "Add missed person"],
+    [elements.splitDetectionButton, "split", "Split merged pair"],
+    [elements.removeDetectionButton, "remove", "Remove duplicate"],
   ];
-  buttonModes.forEach(([button, buttonMode]) => {
+  buttonModes.forEach(([button, buttonMode, label]) => {
     button.setAttribute("aria-pressed", String(mode === buttonMode));
+    button.textContent = mode === buttonMode ? `Cancel: ${label}` : label;
   });
   elements.undoImageCorrectionButton.disabled =
     state.imageCorrectionHistory.length === 0;
   elements.imageResultCanvas.classList.toggle("is-correcting", Boolean(mode));
+  elements.imageCorrectionTarget.hidden = !mode;
 
   if (mode === "add") {
     elements.imageCorrectionHint.textContent =
-      "Tap the center of each missed person. A green manual box will be added.";
+      "Add tool selected. Now tap the center of the missed person in the photo.";
+    elements.imageCorrectionTargetTitle.textContent = "ADD MISSED PERSON";
+    elements.imageCorrectionTargetText.textContent = "Tap the person's center";
   } else if (mode === "split") {
     elements.imageCorrectionHint.textContent =
-      "Tap a broad box that contains two people. It will become two green boxes.";
+      "Split tool selected. Now tap the broad rectangle that contains two people.";
+    elements.imageCorrectionTargetTitle.textContent = "SPLIT MERGED PAIR";
+    elements.imageCorrectionTargetText.textContent = "Tap the broad rectangle";
   } else if (mode === "remove") {
     elements.imageCorrectionHint.textContent =
-      "Tap the unwanted duplicate box to remove it from the final estimate.";
+      "Remove tool selected. Now tap the unwanted duplicate rectangle.";
+    elements.imageCorrectionTargetTitle.textContent = "REMOVE DUPLICATE";
+    elements.imageCorrectionTargetText.textContent = "Tap the unwanted rectangle";
   } else {
     elements.imageCorrectionHint.textContent =
-      "Select a tool; the image will move into view. Tap the person or box once.";
+      "Step 1: choose a correction. Step 2: tap the person or box in the photo.";
   }
 }
 
@@ -1740,14 +1752,21 @@ async function analyzeImageFile(file) {
         poseScore: null,
       }));
     const detections = consolidateDetections(
-      withPoseEvidence.filter((candidate) =>
-        candidate.verifiedByPose ||
-        candidate.score >= IMAGE_DETECTOR_SCORE_FLOOR ||
-        (
-          candidate.fromDetailedScan &&
-          candidate.score >= IMAGE_DETAIL_SCORE_FLOOR
-        )
-      ),
+      withPoseEvidence.filter((candidate) => {
+        if (candidate.verifiedByPose) return true;
+        if (candidate.score >= IMAGE_UNSUPPORTED_SCORE_FLOOR) return true;
+        const independentlySupported = hasIndependentImageSupport(
+          candidate,
+          withPoseEvidence,
+        );
+        return independentlySupported && (
+          candidate.score >= IMAGE_DETECTOR_SCORE_FLOOR ||
+          (
+            candidate.fromDetailedScan &&
+            candidate.score >= IMAGE_DETAIL_SCORE_FLOOR
+          )
+        );
+      }),
     );
     const processingMs = performance.now() - startedAt;
     state.imageAnalysisFilename = (file.name.replace(/\.[^.]+$/, "") || "image")
@@ -2548,6 +2567,20 @@ function detectionsCorrespond(first, second) {
   return overlap >= 0.16 || (containment >= 0.65 && closeEnough);
 }
 
+function hasIndependentImageSupport(candidate, candidates) {
+  if (candidate.verifiedByPose) return true;
+  return candidates.some((other) => {
+    if (other === candidate || other.score < IMAGE_DETAIL_SCORE_FLOOR) {
+      return false;
+    }
+    const separateScan =
+      typeof candidate.scanId === "string" &&
+      typeof other.scanId === "string" &&
+      candidate.scanId !== other.scanId;
+    return separateScan && detectionsCorrespond(candidate, other);
+  });
+}
+
 function poseMatchQuality(detection, pose) {
   if (!detectionsCorrespond(detection, pose)) return 0;
   const overlap = intersectionOverUnion(detection.bbox, pose.bbox);
@@ -2702,11 +2735,14 @@ function consolidateDetections(detections) {
         areOppositeSplitPairMembers(kept, detection)
       ) continue;
 
-      // ObjectDetector already suppresses duplicate boxes within one scan.
-      // Keeping same-scan boxes separate prevents two adjacent people from
-      // being collapsed merely because their bodies overlap in a crowd.
+      // Keep ordinary same-scan boxes separate, but still remove an obvious
+      // contained torso/full-body duplicate returned for the same person.
       const keptScanIds = groupedScanIds.get(kept) || new Set();
-      if (detectionScanId && keptScanIds.has(detectionScanId)) continue;
+      const sameScan = detectionScanId && keptScanIds.has(detectionScanId);
+      if (
+        sameScan &&
+        intersectionOverSmaller(kept.bbox, detection.bbox) < 0.82
+      ) continue;
       if (
         !boxesAreDuplicate(kept.bbox, detection.bbox) &&
         !looksLikeSamePersonAcrossScales(kept, detection)
@@ -3577,6 +3613,7 @@ elements.removeDetectionButton.addEventListener("click", () => {
   setImageCorrectionMode("remove");
 });
 elements.undoImageCorrectionButton.addEventListener("click", undoImageCorrection);
+elements.imageResultCanvas.addEventListener("pointerup", applyImageCorrection);
 elements.imageResultCanvas.addEventListener("click", applyImageCorrection);
 elements.imageFileInput.addEventListener("change", () => {
   const [file] = elements.imageFileInput.files || [];

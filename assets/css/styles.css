@@ -1932,6 +1932,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 }
 
 .image-result-canvas-wrap {
+  position: relative;
   display: grid;
   min-height: 260px;
   max-height: 58vh;
@@ -1953,9 +1954,42 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 
 .image-result-canvas.is-correcting {
   cursor: crosshair;
-  touch-action: manipulation;
+  touch-action: none;
   outline: 4px solid rgba(91, 127, 212, 0.92);
   outline-offset: -4px;
+}
+
+.image-correction-target {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: 14px;
+  display: grid;
+  min-width: min(340px, calc(100% - 28px));
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 10px;
+  color: #fff;
+  background: rgba(13, 18, 28, 0.92);
+  box-shadow: 0 8px 24px rgba(7, 17, 31, 0.28);
+  text-align: center;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.image-correction-target[hidden] {
+  display: none;
+}
+
+.image-correction-target strong {
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+}
+
+.image-correction-target span {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.78rem;
 }
 
 .image-result-summary {
