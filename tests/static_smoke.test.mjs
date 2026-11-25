@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { runInNewContext } from "node:vm";
 import path from "node:path";
 import {
   areAlignedBodyPartDetections,
@@ -100,7 +101,7 @@ assert.match(app, /STABLE_MAX_VISIBLE_MISSED_CYCLES\s*=\s*24/);
 assert.match(app, /POSE_CACHE_MS\s*=\s*650/);
 assert.match(app, /MOTION_REACQUIRE_SCORE_FLOOR\s*=\s*0\.28/);
 assert.match(app, /looksLikeSamePersonAcrossScales/);
-assert.match(app, /detection\.verifiedByPose\s*\|\|\s*detection\.score/);
+assert.match(app, /function hasLiveTrackEvidence/);
 assert.doesNotMatch(app, /counting is disabled/);
 assert.match(app, /continuing with detector tracking/);
 assert.match(app, /videoWidth\s*<\s*MIN_CAMERA_DIMENSION/);
@@ -149,15 +150,14 @@ assert.match(app, /multiPersonDetections/);
 assert.match(app, /function refineMergedImageCandidates/);
 assert.match(app, /selectDistinctSplitPair/);
 assert.match(app, /recoveredFromMergedBox/);
-assert.match(app, /detection_geometry\.js\?v=20261125-ops8/);
+assert.match(app, /detection_geometry\.js\?v=20261125-live-tracks/);
 assert.match(app, /function motionAwareTrackMatchScore/);
 assert.match(app, /function canReacquireMovingTrack/);
 assert.match(app, /function isTrackVisible/);
 assert.match(app, /state\.tracks\.filter\(\(track\) => isTrackVisible\(track, startedAt\)\)/);
 assert.match(app, /allowStandalonePoses:\s*needsPoseVerification/);
 assert.match(app, /velocityX/);
-assert.match(app, /sameRecentPose/);
-assert.match(app, /lastPoseSeenAt/);
+assert.match(app, /lastSupportedAt/);
 assert.match(app, /const reliableTrack/);
 assert.match(app, /const stableTrack = reliableTrack && !rapidlyMoving/);
 assert.match(app, /function stabilizeTrackedBox/);
@@ -256,6 +256,11 @@ assert.equal(
   haveDistinctPoseIdentities({ poseId: 1 }, { poseId: 1 }),
   false,
   "detections backed by the same pose may still be deduplicated",
+);
+assert.equal(
+  haveDistinctPoseIdentities({ poseId: 1, poseBatch: 100 }, { poseId: 2, poseBatch: 200 }),
+  false,
+  "pose numbers from separate scans do not identify separate people",
 );
 
 const mergedPairParent = { bbox: [200, 160, 180, 300], score: 0.64 };
@@ -368,6 +373,56 @@ assert.equal(
   false,
   "independently posed people above and below each other must remain separate",
 );
+
+// Exercise the actual tracker with detections in camera coordinates.
+const trackerState = { tracks: [], flowTracks: new Map() };
+const tracker = runInNewContext(`
+  ${app.slice(app.indexOf("const TRACK_HOLD_MS"), app.indexOf("const IMAGE_PROPOSAL_SCORE_FLOOR"))}
+  ${app.slice(app.indexOf("function intersectionOverUnion"), app.indexOf("function updateFlowTracking"))}
+  ({ updateTracks })
+`, {
+  state: trackerState,
+  elements: { overlay: { width: 1400, height: 700 } },
+  clamp: (value, min, max) => Math.max(min, Math.min(max, value)),
+  haveDistinctPoseIdentities,
+  areOppositeSplitPairMembers,
+  looksLikeSamePersonAcrossScales,
+  matchesCropFragment,
+});
+
+const foreground = { bbox: [458, 155, 708, 535], score: 0.8, fromFullScan: true };
+const shoulderFalsePositive = { bbox: [310, 225, 176, 306], score: 0.36 };
+const cachedFalsePositive = {
+  ...shoulderFalsePositive, score: 0.49, verifiedByPose: true, poseVerifiedFromCache: true,
+};
+assert.equal(tracker.updateTracks([foreground], 100).length, 1);
+for (const now of [300, 500, 700]) {
+  assert.equal(tracker.updateTracks([
+    shoulderFalsePositive,
+    cachedFalsePositive,
+    { ...foreground, score: 0.53 },
+    { ...shoulderFalsePositive, score: 0.8, clippedByLiveTile: true },
+  ], now).length, 1, "weak and crop-clipped boxes must not start tracks beside a person");
+  assert.equal(trackerState.tracks.length, 1);
+}
+const personId = trackerState.tracks[0].id;
+const weakMovingPerson = { ...foreground, bbox: [482, 154, 705, 535], score: 0.38 };
+assert.equal(tracker.updateTracks([weakMovingPerson], 900)[0].id, personId);
+assert.equal(trackerState.tracks[0].lastSupportedAt, 700);
+
+const secondPerson = { bbox: [136, 208, 180, 440], score: 0.56, fromFullScan: true };
+for (const [now, count] of [[1100, 1], [1300, 1], [1500, 2]]) {
+  assert.equal(tracker.updateTracks([foreground, secondPerson], now).length, count,
+    "a second person with three supported scans still gets a track");
+}
+
+trackerState.tracks = [];
+tracker.updateTracks([foreground], 100);
+for (const now of [500, 1000, 1500, 2000, 2500]) {
+  assert.equal(tracker.updateTracks([weakMovingPerson], now).length, 1);
+}
+assert.equal(tracker.updateTracks([weakMovingPerson], 3400).length, 0,
+  "weak boxes alone cannot hold a confirmed track indefinitely");
 
 console.log(`SHEMBOT checkpoint smoke test passed (${requiredFiles.length} assets).`);
 

@@ -21,6 +21,7 @@ export function haveDistinctPoseIdentities(first, second) {
   return (
     Number.isInteger(first.poseId) &&
     Number.isInteger(second.poseId) &&
+    first.poseBatch === second.poseBatch &&
     first.poseId !== second.poseId
   );
 }
