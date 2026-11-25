@@ -33,11 +33,10 @@ const POSE_MODEL_PATH = new URL(
 const MAX_INFERENCE_DIMENSION = 768;
 const TRACK_HOLD_MS = 3200;
 const DISPLAY_TRACK_HOLD_MS = 850;
-const STABLE_DISPLAY_TRACK_HOLD_MS = 2800;
+const STABLE_DISPLAY_TRACK_HOLD_MS = 1300;
+const EXIT_DISPLAY_TRACK_HOLD_MS = 350;
+const TRACK_SUPPORT_GRACE_MS = 2800;
 const RECALIBRATE_AFTER_MS = 30000;
-const MAX_CONFIRMED_MISSED_CYCLES = 28;
-const MAX_VISIBLE_MISSED_CYCLES = 1;
-const STABLE_MAX_VISIBLE_MISSED_CYCLES = 24;
 const POSE_ASSISTED_SCORE_FLOOR = 0.18;
 const DETECTOR_ONLY_SCORE_FLOOR = 0.50;
 const DETECTOR_ONLY_FAST_SCORE = 0.64;
@@ -253,7 +252,6 @@ const state = {
   mirrored: false,
   loopToken: 0,
   fpsHistory: [],
-  countHistory: [],
   lastVideoTime: -1,
   rotation: Number(localStorage.getItem("automaticDetectionRotation")) || 0,
   calibration: null,
@@ -1737,7 +1735,6 @@ function resetTracking() {
   state.tracks = [];
   state.lastConfirmedTracks = [];
   state.flowTracks.clear();
-  state.countHistory = [];
   state.scanIndex = 0;
   state.tileIndex = 0;
   state.scanDetections = [];
@@ -1751,6 +1748,7 @@ function resetTracking() {
     tracked: 0,
   });
   updateCapacity(0);
+  if (state.running) drawDetections([]);
 }
 
 function syncCanvas() {
@@ -2690,6 +2688,11 @@ function consolidateDetections(detections, {
   // boxes inside it turns a crowd into one person.
   const countable = detections.filter((detection) => !detection.edgeCropped);
   const sorted = [...countable].sort((first, second) => {
+    if (typeof first.missedCycles === "number" && typeof second.missedCycles === "number") {
+      const firstSeenThisScan = first.missedCycles === 0;
+      const secondSeenThisScan = second.missedCycles === 0;
+      if (firstSeenThisScan !== secondSeenThisScan) return secondSeenThisScan ? 1 : -1;
+    }
     if (liveDetections) {
       const firstSupported = hasLiveTrackEvidence(first);
       const secondSupported = hasLiveTrackEvidence(second);
@@ -2854,7 +2857,7 @@ function hasLiveTrackEvidence(detection) {
 }
 
 function motionAwareTrackMatchScore(track, detection, now) {
-  const elapsed = clamp(now - track.lastSeen, 0, TRACK_HOLD_MS);
+  const elapsed = clamp(now - track.lastSeen, 0, DISPLAY_TRACK_HOLD_MS);
   const predictedBox = [
     track.bbox[0] + (track.velocityX || 0) * elapsed,
     track.bbox[1] + (track.velocityY || 0) * elapsed,
@@ -2896,7 +2899,7 @@ function canReacquireMovingTrack(track, detection, now) {
   if (
     !track.confirmed ||
     detection.score < MOTION_REACQUIRE_SCORE_FLOOR ||
-    now - track.lastSupportedAt > STABLE_DISPLAY_TRACK_HOLD_MS
+    now - track.lastSupportedAt > TRACK_SUPPORT_GRACE_MS
   ) return false;
 
   const sizeRatio = boxArea(detection.bbox) / Math.max(1, boxArea(track.bbox));
@@ -2907,34 +2910,32 @@ function canReacquireMovingTrack(track, detection, now) {
 }
 
 function isTrackVisible(track, now) {
-  const speed = Math.hypot(track.velocityX || 0, track.velocityY || 0);
+  if (!track.confirmed) return false;
   const sourceWidth = Math.max(1, elements.overlay.width);
   const sourceHeight = Math.max(1, elements.overlay.height);
-  const centerX = (track.bbox[0] + track.bbox[2] / 2) / sourceWidth;
-  const centerY = (track.bbox[1] + track.bbox[3] / 2) / sourceHeight;
-  const nearFrameEdge =
-    centerX < 0.07 || centerX > 0.93 || centerY < 0.07 || centerY > 0.93;
+  const [x, y] = boxCenter(track.bbox);
+  const centerX = x / sourceWidth;
+  const centerY = y / sourceHeight;
+  const velocityX = (track.velocityX || 0) / sourceWidth;
+  const velocityY = (track.velocityY || 0) / sourceHeight;
+  const leavingFrame =
+    (centerX < 0.12 && velocityX < -0.00008) ||
+    (centerX > 0.88 && velocityX > 0.00008) ||
+    (centerY < 0.12 && velocityY < -0.00008) ||
+    (centerY > 0.88 && velocityY > 0.00008);
+  if (leavingFrame) return now - track.lastSeen <= EXIT_DISPLAY_TRACK_HOLD_MS;
+
+  // Use elapsed time so the same miss looks similar at phone and desktop
+  // scan rates. Keep verified, steady people briefly through detector gaps.
   const reliableTrack =
     track.hits >= 3 &&
-    now - track.lastSupportedAt <= STABLE_DISPLAY_TRACK_HOLD_MS &&
+    now - track.lastSupportedAt <= TRACK_SUPPORT_GRACE_MS &&
     (track.poseHits >= 1 || track.maxScore >= DETECTOR_ONLY_FAST_SCORE);
-  const rapidlyMoving = speed > 0.65;
-  const stableTrack = reliableTrack && !rapidlyMoving && !nearFrameEdge;
-  const holdMs = stableTrack
+  const rapidlyMoving = Math.hypot(velocityX, velocityY) > 0.0005;
+  const holdMs = reliableTrack && !rapidlyMoving
     ? STABLE_DISPLAY_TRACK_HOLD_MS
-    : nearFrameEdge
-      ? 650
-      : DISPLAY_TRACK_HOLD_MS;
-  const missedCycleLimit = stableTrack
-    ? STABLE_MAX_VISIBLE_MISSED_CYCLES
-    : nearFrameEdge
-      ? 1
-      : MAX_VISIBLE_MISSED_CYCLES;
-  return (
-    track.confirmed &&
-    now - track.lastSeen <= holdMs &&
-    track.missedCycles <= missedCycleLimit
-  );
+    : DISPLAY_TRACK_HOLD_MS;
+  return now - track.lastSeen <= holdMs;
 }
 
 function nextAvailableTrackId() {
@@ -2958,7 +2959,7 @@ function updateTracks(detections, now) {
     let bestScore = 0.17;
 
     for (const track of state.tracks) {
-      if (!unmatchedTracks.has(track.id)) continue;
+      if (!unmatchedTracks.has(track.id) || now - track.lastSeen > TRACK_HOLD_MS) continue;
       if (!hasEvidence && !canReacquireMovingTrack(track, detection, now)) continue;
       const score = motionAwareTrackMatchScore(track, detection, now);
       if (score > bestScore) {
@@ -3005,7 +3006,7 @@ function updateTracks(detections, now) {
       const freshPose = hasFreshPoseEvidence(detection);
       const instantlyConfirmed = Boolean(
         freshPose ||
-        detection.score >= DETECTOR_ONLY_INSTANT_SCORE
+        (detection.score >= DETECTOR_ONLY_INSTANT_SCORE && !detection.atLargeFrameEdge)
       );
       state.tracks.push({
         id: nextAvailableTrackId(),
@@ -3030,10 +3031,7 @@ function updateTracks(detections, now) {
   for (const track of state.tracks) {
     if (unmatchedTracks.has(track.id)) track.missedCycles += 1;
     const age = now - track.lastSeen;
-    const missedCycleLimit = track.confirmed
-      ? MAX_CONFIRMED_MISSED_CYCLES
-      : 1;
-    if (age <= TRACK_HOLD_MS && track.missedCycles <= missedCycleLimit) {
+    if (age <= TRACK_HOLD_MS && (track.confirmed || track.missedCycles <= 1)) {
       activeTracks.push(track);
     }
     else state.flowTracks.delete(track.id);
@@ -3050,9 +3048,18 @@ function updateTracks(detections, now) {
     return retain;
   });
 
-  return consolidatedConfirmedTracks.filter((track) =>
-    isTrackVisible(track, now)
-  );
+  return consolidatedConfirmedTracks.filter((track) => isTrackVisible(track, now));
+}
+
+function publishLiveTracks(tracks, sample = false) {
+  const countChanged = tracks.length !== state.lastConfirmedTracks.length;
+  state.lastConfirmedTracks = tracks;
+  if (countChanged || sample) {
+    updateCapacity(tracks.length);
+    updatePipelineDiagnostics({ tracked: tracks.length });
+    recordCountHistory(tracks.length);
+  }
+  drawDetections(tracks);
 }
 
 function updateFlowTracking(tracks, now) {
@@ -3064,15 +3071,23 @@ function updateFlowTracking(tracks, now) {
   const sourceWidth = Math.max(1, elements.overlay.width);
   const visibleTrackIds = new Set();
   for (const track of tracks) {
+    // A held rectangle is useful for the display but supplies no crossing
+    // evidence until the detector sees the person again.
+    if (track.lastSeen !== now) continue;
     visibleTrackIds.add(track.id);
     const rawCenterX = (track.bbox[0] + track.bbox[2] / 2) / sourceWidth;
     const centerX = state.mirrored ? 1 - rawCenterX : rawCenterX;
     const distanceFromLine = centerX - state.flowLinePosition;
-    if (Math.abs(distanceFromLine) < 0.035) continue;
-    const side = distanceFromLine < 0 ? "left" : "right";
     const flowTrack = state.flowTracks.get(track.id);
+    const lostContinuity = flowTrack && now - flowTrack.lastSeen > DISPLAY_TRACK_HOLD_MS;
+    if (Math.abs(distanceFromLine) < 0.035) {
+      if (lostContinuity) state.flowTracks.delete(track.id);
+      else if (flowTrack) flowTrack.lastSeen = now;
+      continue;
+    }
+    const side = distanceFromLine < 0 ? "left" : "right";
 
-    if (!flowTrack) {
+    if (!flowTrack || lostContinuity) {
       state.flowTracks.set(track.id, {
         stableSide: side,
         pendingSide: null,
@@ -3263,6 +3278,7 @@ function recoverDetectorAfterRuntimeError(error, token) {
 
 function detectLoop(token) {
   if (!state.running || token !== state.loopToken) return;
+  const startedAt = performance.now();
 
   if (
     elements.camera.readyState < HTMLMediaElement.HAVE_CURRENT_DATA ||
@@ -3270,12 +3286,13 @@ function detectLoop(token) {
     elements.camera.videoHeight < MIN_CAMERA_DIMENSION ||
     elements.camera.currentTime === state.lastVideoTime
   ) {
+    const remaining = state.lastConfirmedTracks.filter((track) => isTrackVisible(track, startedAt));
+    if (remaining.length !== state.lastConfirmedTracks.length) publishLiveTracks(remaining);
     scheduleDetection(token);
     return;
   }
 
   state.lastVideoTime = elements.camera.currentTime;
-  const startedAt = performance.now();
 
   try {
     syncCanvas();
@@ -3305,7 +3322,7 @@ function detectLoop(token) {
 
     if (state.calibration) {
       handleCalibrationResult(result, frame);
-      drawDetections(state.tracks.filter((track) => track.confirmed));
+      publishLiveTracks(state.tracks.filter((track) => isTrackVisible(track, startedAt)));
       scheduleDetection(token);
       return;
     }
@@ -3329,6 +3346,8 @@ function detectLoop(token) {
           bbox[1] <= edgeMargin ||
           bbox[0] + bbox[2] >= frame.sourceWidth - edgeMargin ||
           bbox[1] + bbox[3] >= frame.sourceHeight - edgeMargin;
+        const atLargeFrameEdge =
+          scanArea?.kind === "full" && relativeScanArea >= 0.18 && touchesSourceEdge;
         const clippedByLiveTile = scanArea?.kind === "tile" &&
           touchesInteriorCropEdge(
             [bbox[0] - frame.crop.x, bbox[1] - frame.crop.y, bbox[2], bbox[3]],
@@ -3342,10 +3361,10 @@ function detectLoop(token) {
           fromFullScan: scanArea?.kind === "full",
           relativeScanArea,
           clippedByLiveTile,
-          edgeCropped:
-            scanArea?.kind === "full" &&
-            relativeScanArea >= 0.18 &&
-            touchesSourceEdge,
+          atLargeFrameEdge,
+          // A strong full-frame box can be a real person standing close to
+          // the camera. Confirm it across scans before counting it.
+          edgeCropped: atLargeFrameEdge && category.score < DETECTOR_ONLY_FAST_SCORE,
         };
       });
 
@@ -3394,9 +3413,7 @@ function detectLoop(token) {
       candidates: countCandidates.length,
     });
     const scanCycleComplete = state.scanIndex === 0;
-    let confirmedTracks = consolidateDetections(
-      state.tracks.filter((track) => isTrackVisible(track, startedAt)),
-    );
+    let confirmedTracks;
 
     if (scanCycleComplete) {
       const fusedDetections = consolidateDetections(state.scanDetections, {
@@ -3405,19 +3422,12 @@ function detectLoop(token) {
       state.scanDetections = [];
       state.tileIndex = (state.tileIndex + 1) % 4;
       confirmedTracks = updateTracks(fusedDetections, startedAt);
-      // Track confirmation already supplies temporal persistence. Display the
-      // current confirmed count so people who leave are not kept by an older
-      // three-cycle median.
-      state.countHistory = [confirmedTracks.length];
-      const displayedCount = confirmedTracks.length;
-      updateCapacity(displayedCount);
-      updatePipelineDiagnostics({ tracked: displayedCount });
-      recordCountHistory(displayedCount);
-      updateFlowTracking(confirmedTracks, startedAt);
+    } else {
+      confirmedTracks = state.tracks.filter((track) => isTrackVisible(track, startedAt));
     }
 
-    state.lastConfirmedTracks = confirmedTracks;
-    drawDetections(confirmedTracks);
+    publishLiveTracks(confirmedTracks, scanCycleComplete);
+    if (scanCycleComplete) updateFlowTracking(confirmedTracks, startedAt);
 
     const inferenceFps = 1000 / Math.max(1, performance.now() - startedAt);
     state.fpsHistory.push(inferenceFps);
@@ -3425,7 +3435,8 @@ function detectLoop(token) {
     elements.fpsValue.textContent = average(state.fpsHistory).toFixed(1);
 
     if (
-      confirmedTracks.length === 0 &&
+      scanCycleComplete &&
+      state.tracks.length === 0 &&
       performance.now() - state.lastCalibrationAt > RECALIBRATE_AFTER_MS
     ) {
       beginOrientationCalibration();

@@ -95,9 +95,7 @@ assert.match(app, /IMAGE_DETECTOR_SCORE_FLOOR\s*=\s*0\.34/);
 assert.match(app, /IMAGE_PROPOSAL_SCORE_FLOOR\s*=\s*0\.15/);
 assert.match(app, /TRACK_HOLD_MS\s*=\s*3200/);
 assert.match(app, /DISPLAY_TRACK_HOLD_MS\s*=\s*850/);
-assert.match(app, /STABLE_DISPLAY_TRACK_HOLD_MS\s*=\s*2800/);
-assert.match(app, /MAX_VISIBLE_MISSED_CYCLES\s*=\s*1/);
-assert.match(app, /STABLE_MAX_VISIBLE_MISSED_CYCLES\s*=\s*24/);
+assert.match(app, /function publishLiveTracks/);
 assert.match(app, /POSE_CACHE_MS\s*=\s*650/);
 assert.match(app, /MOTION_REACQUIRE_SCORE_FLOOR\s*=\s*0\.28/);
 assert.match(app, /looksLikeSamePersonAcrossScales/);
@@ -107,7 +105,6 @@ assert.match(app, /continuing with detector tracking/);
 assert.match(app, /videoWidth\s*<\s*MIN_CAMERA_DIMENSION/);
 assert.match(app, /function recoverDetectorAfterRuntimeError/);
 assert.match(app, /Switching to compatible detection/);
-assert.match(app, /MAX_CONFIRMED_MISSED_CYCLES/);
 assert.match(app, /confirmed:\s*instantlyConfirmed/);
 assert.match(app, /DETECTOR_ONLY_INSTANT_SCORE\s*=\s*0\.78/);
 assert.match(app, /width:\s*\{ ideal: 1280 \}/);
@@ -159,7 +156,6 @@ assert.match(app, /allowStandalonePoses:\s*needsPoseVerification/);
 assert.match(app, /velocityX/);
 assert.match(app, /lastSupportedAt/);
 assert.match(app, /const reliableTrack/);
-assert.match(app, /const stableTrack = reliableTrack && !rapidlyMoving/);
 assert.match(app, /function stabilizeTrackedBox/);
 assert.match(app, /function duplicatesAlreadyMatchedTrack/);
 assert.match(app, /function detailedCrowdScanAreas/);
@@ -375,11 +371,12 @@ assert.equal(
 );
 
 // Exercise the actual tracker with detections in camera coordinates.
-const trackerState = { tracks: [], flowTracks: new Map() };
+const trackerState = { tracks: [], lastConfirmedTracks: [], flowTracks: new Map() };
+const published = { count: 0, tracked: 0, boxes: [], historyCount: 0 };
 const tracker = runInNewContext(`
   ${app.slice(app.indexOf("const TRACK_HOLD_MS"), app.indexOf("const IMAGE_PROPOSAL_SCORE_FLOOR"))}
-  ${app.slice(app.indexOf("function intersectionOverUnion"), app.indexOf("function updateFlowTracking"))}
-  ({ updateTracks })
+  ${app.slice(app.indexOf("function intersectionOverUnion"), app.indexOf("function drawArea"))}
+  ({ updateTracks, isTrackVisible, publishLiveTracks, updateFlowTracking })
 `, {
   state: trackerState,
   elements: { overlay: { width: 1400, height: 700 } },
@@ -388,6 +385,13 @@ const tracker = runInNewContext(`
   areOppositeSplitPairMembers,
   looksLikeSamePersonAcrossScales,
   matchesCropFragment,
+  updateCapacity: (count) => { published.count = count; },
+  updatePipelineDiagnostics: ({ tracked }) => { published.tracked = tracked; },
+  recordCountHistory: (count) => { published.historyCount = count; },
+  drawDetections: (tracks) => { published.boxes = tracks; },
+  saveFlowCounts: () => {},
+  updateFlowUi: () => {},
+  recordHistory: () => {},
 });
 
 const foreground = { bbox: [458, 155, 708, 535], score: 0.8, fromFullScan: true };
@@ -423,6 +427,53 @@ for (const now of [500, 1000, 1500, 2000, 2500]) {
 }
 assert.equal(tracker.updateTracks([weakMovingPerson], 3400).length, 0,
   "weak boxes alone cannot hold a confirmed track indefinitely");
+
+trackerState.tracks = [];
+const closePerson = { ...foreground, bbox: [560, 30, 635, 670], score: 0.91, atLargeFrameEdge: true };
+assert.equal(tracker.updateTracks([closePerson], 100).length, 0,
+  "one large edge detection cannot immediately add a person");
+assert.equal(tracker.updateTracks([closePerson], 250).length, 1,
+  "a strong close-up person should count after a second scan");
+const visible = tracker.updateTracks([closePerson], 400);
+tracker.publishLiveTracks(visible, true);
+assert.equal(published.count, published.boxes.length);
+assert.equal(published.tracked, 1);
+assert.equal(published.historyCount, 1);
+for (const now of [450, 500, 550, 600, 1100, 1550]) {
+  assert.equal(tracker.updateTracks([], now).length, 1,
+    "a steady person survives a brief gap at both fast and slow scan rates");
+}
+tracker.publishLiveTracks(tracker.updateTracks([], 1750));
+assert.equal(published.count, 0, "an expired box and the count disappear together between scan cycles");
+assert.equal(published.boxes.length, 0);
+assert.equal(published.tracked, 0);
+assert.equal(published.historyCount, 0);
+
+const movingOut = {
+  ...visible[0], bbox: [1250, 250, 130, 300], velocityX: 0.25, lastSeen: 2000, lastSupportedAt: 2000,
+};
+assert.equal(tracker.isTrackVisible(movingOut, 2250), true);
+assert.equal(tracker.isTrackVisible(movingOut, 2400), false,
+  "a person moving out of the frame gets a shorter hold");
+
+Object.assign(trackerState, {
+  flowEnabled: true, rightIsEntry: true, flowLinePosition: 0.5, entered: 0, exited: 0,
+});
+function observeCrossing(centerX, now, lastSeen = now) {
+  tracker.updateFlowTracking([{ id: 5, bbox: [centerX - 50, 100, 100, 200], lastSeen }], now);
+}
+observeCrossing(600, 2000);
+observeCrossing(700, 2400);
+observeCrossing(700, 2800);
+observeCrossing(700, 3200);
+observeCrossing(800, 3400);
+observeCrossing(800, 3500, 3400);
+assert.equal(trackerState.entered, 0, "a held box cannot confirm a crossing");
+observeCrossing(800, 3600);
+assert.equal(trackerState.entered, 1, "a slow crossing still counts after two real observations");
+observeCrossing(600, 5000);
+observeCrossing(600, 5100);
+assert.equal(trackerState.exited, 0, "reappearance after a gap cannot create an exit");
 
 console.log(`SHEMBOT checkpoint smoke test passed (${requiredFiles.length} assets).`);
 
