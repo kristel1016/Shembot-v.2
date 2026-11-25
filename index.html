@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f3f6ff" />
     <meta name="description" content="Private, on-device people counting from your phone or laptop camera." />
     <title>Shembot Vision Console</title>
-    <link rel="stylesheet" href="./assets/css/styles.css?v=20261125-ops7" />
+    <link rel="stylesheet" href="./assets/css/styles.css?v=20261125-action-steps" />
     <script>
       /* Universal range-progress tracker for custom slider fill */
       function syncRangeProgress(el) {
@@ -34,7 +34,7 @@
       });
       window.addEventListener('resize', syncWorkspaceScale, { passive: true });
     </script>
-    <script defer src="./src/js/boot.js?v=20261125-simple-actions"></script>
+    <script defer src="./src/js/boot.js?v=20261125-action-steps"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -380,11 +380,11 @@
               <span class="image-guidance-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24"><path d="M12 2a8 8 0 0 0-5 14.2V20h10v-3.8A8 8 0 0 0 12 2Zm3 13.2V18H9v-2.8l-.8-.6A6 6 0 1 1 15.8 14l-.8.6v.6ZM9 22h6v-2H9v2Z" /></svg>
               </span>
-              <span>
+              <div class="image-guidance-content">
                 <small>Suggested action</small>
-                <strong id="imageRecommendationTitle">Check a photo to see what to do next</strong>
-                <p id="imageRecommendationMessage">This uses the estimated count and the room limit.</p>
-              </span>
+                <strong id="imageRecommendationTitle"></strong>
+                <ol id="imageRecommendationSteps"></ol>
+              </div>
             </aside>
             <p class="image-detection-details" id="imageDetectionDetails">No confidence summary yet.</p>
             <div class="image-result-actions">

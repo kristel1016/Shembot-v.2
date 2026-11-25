@@ -53,7 +53,7 @@ for (const id of [
   "downloadImageResultButton",
   "imageResultGuidance",
   "imageRecommendationTitle",
-  "imageRecommendationMessage",
+  "imageRecommendationSteps",
   "countValue",
   "capacityMetric",
   "capacityStatus",
@@ -178,7 +178,8 @@ assert.match(app, /detections\.length >= 8/);
 assert.doesNotMatch(app, /applyImageCorrection|manualCorrection|imageCorrectionMode/);
 assert.match(app, /strongStandalonePose/);
 assert.match(app, /haveDistinctPoseIdentities/);
-assert.match(app, /Stop letting people in and check the count/);
+assert.match(html, /<ol id="imageRecommendationSteps">/);
+assert.match(app, /"The room is too full"/);
 assert.match(app, /const movedRight/);
 assert.match(app, /const centerX = state\.mirrored \? 1 - rawCenterX : rawCenterX/);
 assert.match(app, /rightIsEntry/);

@@ -2037,7 +2037,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
 .image-result-guidance[data-status="near"] .image-guidance-icon { color: var(--warning); }
 .image-result-guidance[data-status="over"] .image-guidance-icon { color: var(--danger); }
 
-.image-result-guidance > span:last-child {
+.image-guidance-content {
   display: grid;
   min-width: 0;
   gap: 3px;
@@ -2056,10 +2056,16 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   font-size: 0.94rem;
 }
 
-.image-result-guidance p {
-  color: var(--muted);
-  font-size: 0.84rem;
+.image-result-guidance ol {
+  margin: 3px 0 0;
+  padding-inline-start: 1.4em;
+  color: var(--ink);
+  font-size: 0.875rem;
   line-height: 1.45;
+}
+
+.image-result-guidance li + li {
+  margin-block-start: 4px;
 }
 
 .image-detection-details {

@@ -94,7 +94,7 @@ const elements = {
   imageDetectionDetails: document.querySelector("#imageDetectionDetails"),
   imageResultGuidance: document.querySelector("#imageResultGuidance"),
   imageRecommendationTitle: document.querySelector("#imageRecommendationTitle"),
-  imageRecommendationMessage: document.querySelector("#imageRecommendationMessage"),
+  imageRecommendationSteps: document.querySelector("#imageRecommendationSteps"),
   areaStatus: document.querySelector("#areaStatus"),
   zoneSelection: document.querySelector("#zoneSelection"),
   zoneDraft: document.querySelector("#zoneDraft"),
@@ -1448,33 +1448,47 @@ function renderAnalyzedImage(detections, processingMs) {
   elements.imageCapacityStatus.dataset.status = status;
   elements.imageProcessingTime.textContent = `${Math.round(processingMs)} ms`;
   elements.imageResultGuidance.dataset.status = status;
+  let title;
+  let steps;
   if (detections.length === 0) {
-    elements.imageRecommendationTitle.textContent =
-      "Check the room yourself";
-    elements.imageRecommendationMessage.textContent =
-      "The photo shows no people. Look for anyone the camera may have missed.";
+    title = "Check the room yourself";
+    steps = [
+      "Look around the room for anyone the camera may have missed.",
+      "If the photo is dark or part of the room is out of view, take a clearer photo and count again.",
+    ];
   } else if (detections.length > capacity) {
     const excess = detections.length - capacity;
-    elements.imageRecommendationTitle.textContent =
-      "Stop letting people in and check the count";
-    elements.imageRecommendationMessage.textContent =
-      `If the count is right, ask at least ${excess} ${excess === 1 ? "person" : "people"} to wait in a safe place outside the room. ` +
-      "Keep exits clear and count again before letting anyone in.";
+    title = "The room is too full";
+    steps = [
+      "Ask someone to stay at the door and stop letting people in.",
+      "Count the people in the room by hand to check the photo's estimate.",
+      `If the count is right, ask at least ${excess} ${excess === 1 ? "person" : "people"} to step out and wait in a safe place.`,
+      "Keep doors, hallways, and exits clear.",
+      "Count again. Let people in only if the new count is below the room limit.",
+    ];
   } else if (status === "over") {
-    elements.imageRecommendationTitle.textContent = "The room is full";
-    elements.imageRecommendationMessage.textContent =
-      "Ask people to wait. Count again after someone leaves before letting anyone in.";
+    title = "The room is full";
+    steps = [
+      "Ask people arriving to wait in a safe place.",
+      "Keep the doorway clear so people can leave easily.",
+      "Count again after someone leaves. Let people in only if there is room.",
+    ];
   } else {
     const remaining = capacity - detections.length;
-    elements.imageRecommendationTitle.textContent = status === "near"
-      ? "The room is almost full"
-      : "There is still room";
-    elements.imageRecommendationMessage.textContent =
-      `There is room for about ${remaining} more ${remaining === 1 ? "person" : "people"}. ` +
-      (status === "near"
-        ? "Check the count before letting more people in."
-        : "Count again when more people come in.");
+    title = status === "near" ? "The room is almost full" : "There is still room";
+    steps = [
+      `The photo suggests there is room for about ${remaining} more ${remaining === 1 ? "person" : "people"}.`,
+      status === "near"
+        ? "Check the count at the door before letting anyone else in."
+        : "Count again after a group comes in.",
+    ];
   }
+  elements.imageRecommendationTitle.textContent = title;
+  elements.imageRecommendationSteps.replaceChildren(...steps.map((step) => {
+    const item = document.createElement("li");
+    item.textContent = step;
+    return item;
+  }));
 
   if (detections.length) {
     const confidenceValues = detections.map((detection) =>
