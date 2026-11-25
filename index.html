@@ -34,7 +34,7 @@
       });
       window.addEventListener('resize', syncWorkspaceScale, { passive: true });
     </script>
-    <script defer src="./src/js/boot.js?v=20261125-ops8"></script>
+    <script defer src="./src/js/boot.js?v=20261125-simple-actions"></script>
   </head>
   <body>
     <main class="app-shell">
@@ -382,8 +382,8 @@
               </span>
               <span>
                 <small>Suggested action</small>
-                <strong id="imageRecommendationTitle">Analyze an image to receive guidance</strong>
-                <p id="imageRecommendationMessage">The recommendation will use the detected count and configured room capacity.</p>
+                <strong id="imageRecommendationTitle">Check a photo to see what to do next</strong>
+                <p id="imageRecommendationMessage">This uses the estimated count and the room limit.</p>
               </span>
             </aside>
             <p class="image-detection-details" id="imageDetectionDetails">No confidence summary yet.</p>

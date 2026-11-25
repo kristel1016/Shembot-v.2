@@ -178,7 +178,7 @@ assert.match(app, /detections\.length >= 8/);
 assert.doesNotMatch(app, /applyImageCorrection|manualCorrection|imageCorrectionMode/);
 assert.match(app, /strongStandalonePose/);
 assert.match(app, /haveDistinctPoseIdentities/);
-assert.match(app, /Stop entry and move at least/);
+assert.match(app, /Stop letting people in and check the count/);
 assert.match(app, /const movedRight/);
 assert.match(app, /const centerX = state\.mirrored \? 1 - rawCenterX : rawCenterX/);
 assert.match(app, /rightIsEntry/);

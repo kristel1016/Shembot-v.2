@@ -1450,28 +1450,30 @@ function renderAnalyzedImage(detections, processingMs) {
   elements.imageResultGuidance.dataset.status = status;
   if (detections.length === 0) {
     elements.imageRecommendationTitle.textContent =
-      "Verify the room in person before reporting zero occupancy";
+      "Check the room yourself";
     elements.imageRecommendationMessage.textContent =
-      "Turn on the room lights, use the original-resolution photo, and ask a staff member to walk through hidden areas before closing or declaring the room empty.";
+      "The photo shows no people. Look for anyone the camera may have missed.";
+  } else if (detections.length > capacity) {
+    const excess = detections.length - capacity;
+    elements.imageRecommendationTitle.textContent =
+      "Stop letting people in and check the count";
+    elements.imageRecommendationMessage.textContent =
+      `If the count is right, ask at least ${excess} ${excess === 1 ? "person" : "people"} to wait in a safe place outside the room. ` +
+      "Keep exits clear and count again before letting anyone in.";
   } else if (status === "over") {
-    const excess = Math.max(0, detections.length - capacity);
-    elements.imageRecommendationTitle.textContent = excess > 0
-      ? `Stop entry and move at least ${excess} ${excess === 1 ? "person" : "people"} to the overflow area`
-      : "Stop entry because the room has reached its limit";
+    elements.imageRecommendationTitle.textContent = "The room is full";
     elements.imageRecommendationMessage.textContent =
-      "Place one staff member at the entrance, keep the exit and emergency route open, use one-out/one-in admission, and run another count after people have moved.";
-  } else if (status === "near") {
-    const remaining = Math.max(0, capacity - detections.length);
-    elements.imageRecommendationTitle.textContent =
-      "Assign an entrance monitor and prepare one-out/one-in admission";
-    elements.imageRecommendationMessage.textContent =
-      `${remaining} ${remaining === 1 ? "place remains" : "places remain"}. Point visitors to the marked overflow or waiting area, keep the doorway clear, and recount after each group enters.`;
+      "Ask people to wait. Count again after someone leaves before letting anyone in.";
   } else {
-    const remaining = Math.max(0, capacity - detections.length);
-    elements.imageRecommendationTitle.textContent =
-      "Keep normal access open and schedule the next occupancy check";
+    const remaining = capacity - detections.length;
+    elements.imageRecommendationTitle.textContent = status === "near"
+      ? "The room is almost full"
+      : "There is still room";
     elements.imageRecommendationMessage.textContent =
-      `${remaining} ${remaining === 1 ? "place remains" : "places remain"}. Keep entrances and emergency exits unobstructed, record this result, and recount whenever a group enters or the room layout changes.`;
+      `There is room for about ${remaining} more ${remaining === 1 ? "person" : "people"}. ` +
+      (status === "near"
+        ? "Check the count before letting more people in."
+        : "Count again when more people come in.");
   }
 
   if (detections.length) {
