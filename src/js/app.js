@@ -2856,6 +2856,16 @@ function hasLiveTrackEvidence(detection) {
     (detection.score >= DETECTOR_ONLY_SCORE_FLOOR && !detection.clippedByLiveTile);
 }
 
+function canConfirmOnFullFrame(detection) {
+  return detection.fromFullScan && !detection.standalonePose &&
+    !detection.edgeCropped && !detection.atLargeFrameEdge && !detection.clippedByLiveTile && (
+      detection.score >= DETECTOR_ONLY_INSTANT_SCORE || (
+        detection.score >= DETECTOR_ONLY_SCORE_FLOOR &&
+        hasFreshPoseEvidence(detection) && detection.strongPoseEvidence
+      )
+    );
+}
+
 function motionAwareTrackMatchScore(track, detection, now) {
   const elapsed = clamp(now - track.lastSeen, 0, DISPLAY_TRACK_HOLD_MS);
   const predictedBox = [
@@ -2945,7 +2955,7 @@ function nextAvailableTrackId() {
   return id;
 }
 
-function updateTracks(detections, now) {
+function updateTracks(detections, now, { earlyFullFrame = false } = {}) {
   const unmatchedTracks = new Set(state.tracks.map((track) => track.id));
   // Match supported detections before trying to recover missing tracks from
   // weak boxes. A weak box can only update its own unmatched confirmed track.
@@ -2955,6 +2965,16 @@ function updateTracks(detections, now) {
 
   for (const detection of orderedDetections) {
     const hasEvidence = hasLiveTrackEvidence(detection);
+    // Only confirm a new person on the full-frame pass. Confirmed tracks and
+    // uncertain detections use the combined full-frame/tile result.
+    if (earlyFullFrame && (
+      !canConfirmOnFullFrame(detection) ||
+      state.tracks.some((track) => track.confirmed && now - track.lastSeen <= TRACK_HOLD_MS && (
+        motionAwareTrackMatchScore(track, detection, now) > 0.17 ||
+        looksLikeSamePersonAcrossScales(track, detection)
+      ))
+    )) continue;
+
     let bestTrack = null;
     let bestScore = 0.17;
 
@@ -2969,6 +2989,12 @@ function updateTracks(detections, now) {
     }
 
     if (bestTrack) {
+      if (bestTrack.confirmedEarly) {
+        // The same full-frame observation participates in tile fusion. Count
+        // it as one hit so it cannot artificially strengthen the track.
+        unmatchedTracks.delete(bestTrack.id);
+        continue;
+      }
       const previousCenter = boxCenter(bestTrack.bbox);
       const nextCenter = boxCenter(detection.bbox);
       const elapsed = Math.max(1, now - bestTrack.lastSeen);
@@ -2994,7 +3020,10 @@ function updateTracks(detections, now) {
       bestTrack.lastSeen = now;
       bestTrack.fromFullScan = detection.fromFullScan;
       const requiredHits = bestTrack.maxScore >= DETECTOR_ONLY_FAST_SCORE ? 2 : 3;
-      if (freshPose || bestTrack.confirmationHits >= requiredHits) bestTrack.confirmed = true;
+      if (earlyFullFrame || freshPose || bestTrack.confirmationHits >= requiredHits) {
+        bestTrack.confirmed = true;
+      }
+      bestTrack.confirmedEarly = earlyFullFrame;
       unmatchedTracks.delete(bestTrack.id);
     } else {
       if (!hasEvidence) continue;
@@ -3023,12 +3052,16 @@ function updateTracks(detections, now) {
         velocityX: 0,
         velocityY: 0,
         confirmed: instantlyConfirmed,
+        confirmedEarly: earlyFullFrame,
       });
     }
   }
 
+  if (earlyFullFrame) return state.tracks.filter((track) => isTrackVisible(track, now));
+
   const activeTracks = [];
   for (const track of state.tracks) {
+    track.confirmedEarly = false;
     if (unmatchedTracks.has(track.id)) track.missedCycles += 1;
     const age = now - track.lastSeen;
     if (age <= TRACK_HOLD_MS && (track.confirmed || track.missedCycles <= 1)) {
@@ -3422,6 +3455,11 @@ function detectLoop(token) {
       state.scanDetections = [];
       state.tileIndex = (state.tileIndex + 1) % 4;
       confirmedTracks = updateTracks(fusedDetections, startedAt);
+    } else if (countCandidates.some(canConfirmOnFullFrame)) {
+      const fullFrameDetections = consolidateDetections(countCandidates, {
+        liveDetections: true,
+      });
+      confirmedTracks = updateTracks(fullFrameDetections, startedAt, { earlyFullFrame: true });
     } else {
       confirmedTracks = state.tracks.filter((track) => isTrackVisible(track, startedAt));
     }

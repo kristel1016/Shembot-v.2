@@ -430,6 +430,35 @@ assert.equal(tracker.updateTracks([weakMovingPerson], 3400).length, 0,
 
 trackerState.tracks = [];
 const closePerson = { ...foreground, bbox: [560, 30, 635, 670], score: 0.91, atLargeFrameEdge: true };
+const early = { earlyFullFrame: true };
+const tileDuplicate = { ...foreground, fromFullScan: false };
+const poseConfirmedPerson = { ...secondPerson, verifiedByPose: true, strongPoseEvidence: true };
+assert.equal(tracker.updateTracks([
+  secondPerson, closePerson, tileDuplicate,
+  { ...poseConfirmedPerson, poseVerifiedFromCache: true },
+  { ...poseConfirmedPerson, standalonePose: true },
+], 50, early).length, 0, "uncertain, edge, tile, and unmatched pose boxes must wait for fusion");
+assert.equal(trackerState.tracks.length, 0);
+const beforeTile = tracker.updateTracks([foreground, { ...foreground }], 100, early);
+tracker.publishLiveTracks(beforeTile);
+assert.equal(published.count, 1, "a strong full-frame detection updates the displayed count before the tile");
+const afterTile = tracker.updateTracks([tileDuplicate], 160);
+assert.equal(afterTile[0].id, beforeTile[0].id, "tile fusion should preserve the early track ID");
+assert.equal(afterTile[0].confirmationHits, 1, "a cycle should provide only one confirmation hit");
+assert.equal(tracker.updateTracks([foreground], 250, early)[0].confirmationHits, 1,
+  "an existing track should wait for the combined scan before gaining another hit");
+assert.equal(tracker.updateTracks([tileDuplicate], 310)[0].confirmationHits, 2);
+
+trackerState.tracks = [];
+assert.equal(tracker.updateTracks([secondPerson], 50).length, 0);
+const tentativeId = trackerState.tracks[0].id;
+const poseConfirmedTrack = tracker.updateTracks([poseConfirmedPerson], 100, early)[0];
+assert.equal(poseConfirmedTrack.id, tentativeId,
+  "a strong current pose can confirm a pending detector track before the tile");
+assert.equal(tracker.updateTracks([poseConfirmedPerson], 160)[0].confirmationHits, 2,
+  "confirming a pending track must also count only one hit per scan cycle");
+
+trackerState.tracks = [];
 assert.equal(tracker.updateTracks([closePerson], 100).length, 0,
   "one large edge detection cannot immediately add a person");
 assert.equal(tracker.updateTracks([closePerson], 250).length, 1,
