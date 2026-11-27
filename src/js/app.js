@@ -1830,10 +1830,23 @@ function getScanAreas() {
     height: tileSize * base.height,
     kind: "tile",
   }));
-  // Run the full frame every cycle, then rotate through one zoomed tile.
-  // This updates tracks after two inferences instead of waiting for all five.
+  // Reuse the full scan area and rotate through the four zoomed tiles.
   const tile = tiles[state.tileIndex % tiles.length];
   return [{ ...base, kind: "full" }, tile];
+}
+
+function liveScanStep(index, tracks, now) {
+  // Once tracks are stable, update them with a full-only pass before each
+  // full-and-tile pair. Keep the pair for acquisition and uncertain tracks.
+  const stable = index === 0 && tracks.length > 0 && tracks.every((track) =>
+    track.confirmationHits >= 2 && track.poseHits >= 1 &&
+    now - track.lastSeen <= POSE_VERIFICATION_INTERVAL_MS
+  );
+  return {
+    areaIndex: index === 2 ? 1 : 0,
+    nextIndex: index === 2 ? 0 : stable ? 1 : 2,
+    completesCycle: index === 2 || stable,
+  };
 }
 
 function prepareInferenceFrame(rotation, areaOverride) {
@@ -3336,9 +3349,10 @@ function detectLoop(token) {
       ? state.calibration.rotations[state.calibration.index]
       : state.rotation;
     const scanAreas = getScanAreas();
+    const scanStep = liveScanStep(state.scanIndex, state.lastConfirmedTracks, startedAt);
     const scanArea = state.calibration
       ? state.area
-      : scanAreas[state.scanIndex % scanAreas.length];
+      : scanAreas[scanStep.areaIndex];
     const frame = prepareInferenceFrame(rotation, scanArea);
     if (!frame) {
       scheduleDetection(token);
@@ -3363,7 +3377,7 @@ function detectLoop(token) {
       return;
     }
 
-    state.scanIndex = (state.scanIndex + 1) % scanAreas.length;
+    state.scanIndex = scanStep.nextIndex;
 
     const rawDetections = result.detections || [];
     const people = rawDetections
@@ -3451,7 +3465,7 @@ function detectLoop(token) {
       ).length,
       candidates: countCandidates.length,
     });
-    const scanCycleComplete = state.scanIndex === 0;
+    const scanCycleComplete = scanStep.completesCycle;
     let confirmedTracks;
 
     if (scanCycleComplete) {
@@ -3459,7 +3473,7 @@ function detectLoop(token) {
         liveDetections: true,
       });
       state.scanDetections = [];
-      state.tileIndex = (state.tileIndex + 1) % 4;
+      if (scanArea.kind === "tile") state.tileIndex = (state.tileIndex + 1) % 4;
       confirmedTracks = updateTracks(fusedDetections, startedAt);
     } else if (countCandidates.some(canConfirmOnFullFrame)) {
       const fullFrameDetections = consolidateDetections(countCandidates, {

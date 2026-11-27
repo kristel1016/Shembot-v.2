@@ -3,7 +3,7 @@ const errorElement = document.querySelector("#errorMessage");
 
 statusElement.textContent = "Starting person detector...";
 
-import("./app.js?v=20261127-full-frame-pose").catch((error) => {
+import("./app.js?v=20261127-adaptive-scan").catch((error) => {
   console.error("Detector startup failed", error);
   statusElement.textContent = `Detector failed: ${error?.message || "Unknown error"}`;
   errorElement.textContent = `Startup error: ${error?.message || "Unknown error"}. Reload the page to try again.`;

@@ -112,6 +112,20 @@ assert.match(app, /height:\s*\{ ideal: 720 \}/);
 assert.match(app, /numPoses:\s*MAX_POSES/);
 assert.match(app, /pipeline:\s*\{ \.\.\.state\.pipelineStats \}/);
 assert.match(app, /return \[\{ \.\.\.base, kind: "full" \}, tile\]/);
+const scanStep = runInNewContext(`${app.slice(app.indexOf("function liveScanStep"), app.indexOf("function prepareInferenceFrame"))}\nliveScanStep`, {
+  POSE_VERIFICATION_INTERVAL_MS: 420,
+});
+function scanPlan(index, tracks, now = 100) {
+  const { areaIndex, nextIndex, completesCycle } = scanStep(index, tracks, now);
+  return [areaIndex, nextIndex, completesCycle];
+}
+const stableTrack = { confirmationHits: 3, poseHits: 1, lastSeen: 50 };
+assert.deepEqual(scanPlan(0, []), [0, 2, false]);
+assert.deepEqual(scanPlan(0, [{ ...stableTrack, confirmationHits: 1 }]), [0, 2, false]);
+assert.deepEqual(scanPlan(0, [stableTrack], 500), [0, 2, false]);
+assert.deepEqual([0, 1, 2].map((index) => scanPlan(index, [stableTrack])),
+  [[0, 1, true], [0, 2, false], [1, 0, true]],
+  "stable tracks get an immediate full update between full-and-tile pairs");
 assert.doesNotMatch(app, /Detection paused:/);
 assert.match(app, /navigator\.mediaDevices\.getUserMedia/);
 assert.match(app, /function getCapacityStatus/);
