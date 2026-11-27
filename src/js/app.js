@@ -48,6 +48,7 @@ const IMAGE_DETAIL_SCORE_FLOOR = 0.28;
 const IMAGE_UNSUPPORTED_SCORE_FLOOR = 0.42;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const POSE_VERIFICATION_INTERVAL_MS = 420;
+const POSE_ACQUISITION_INTERVAL_MS = 250;
 const POSE_CACHE_MS = 650;
 const MAX_POSES = 30;
 const ORIENTATION_SAMPLES = 2;
@@ -2852,18 +2853,20 @@ function hasFreshPoseEvidence(detection) {
 }
 
 function hasLiveTrackEvidence(detection) {
-  return hasFreshPoseEvidence(detection) ||
+  return hasLivePoseEvidence(detection) ||
     (detection.score >= DETECTOR_ONLY_SCORE_FLOOR && !detection.clippedByLiveTile);
 }
 
+function hasLivePoseEvidence(detection) {
+  return hasFreshPoseEvidence(detection) && detection.strongPoseEvidence === true;
+}
+
 function canConfirmOnFullFrame(detection) {
-  return detection.fromFullScan && !detection.standalonePose &&
-    !detection.edgeCropped && !detection.atLargeFrameEdge && !detection.clippedByLiveTile && (
-      detection.score >= DETECTOR_ONLY_INSTANT_SCORE || (
-        detection.score >= DETECTOR_ONLY_SCORE_FLOOR &&
-        hasFreshPoseEvidence(detection) && detection.strongPoseEvidence
-      )
-    );
+  return detection.fromFullScan && !detection.edgeCropped && (
+    hasLivePoseEvidence(detection) ||
+    (!detection.atLargeFrameEdge && !detection.clippedByLiveTile &&
+      detection.score >= DETECTOR_ONLY_INSTANT_SCORE)
+  );
 }
 
 function motionAwareTrackMatchScore(track, detection, now) {
@@ -3014,7 +3017,7 @@ function updateTracks(detections, now, { earlyFullFrame = false } = {}) {
           ? bestTrack.confirmationHits + 1
           : 1;
       }
-      const freshPose = hasFreshPoseEvidence(detection);
+      const freshPose = hasLivePoseEvidence(detection);
       if (freshPose) bestTrack.poseHits += 1;
       bestTrack.missedCycles = 0;
       bestTrack.lastSeen = now;
@@ -3032,7 +3035,7 @@ function updateTracks(detections, now, { earlyFullFrame = false } = {}) {
         duplicatesAlreadyMatchedTrack(track, detection, now)
       );
       if (duplicateOfMatchedTrack) continue;
-      const freshPose = hasFreshPoseEvidence(detection);
+      const freshPose = hasLivePoseEvidence(detection);
       const instantlyConfirmed = Boolean(
         freshPose ||
         (detection.score >= DETECTOR_ONLY_INSTANT_SCORE && !detection.atLargeFrameEdge)
@@ -3402,10 +3405,13 @@ function detectLoop(token) {
       });
 
     const poseWasAvailable = Boolean(state.poseLandmarker);
+    const poseInterval = state.lastConfirmedTracks.length === 0
+      ? POSE_ACQUISITION_INTERVAL_MS
+      : POSE_VERIFICATION_INTERVAL_MS;
     const needsPoseVerification =
       poseWasAvailable &&
-      performance.now() - state.lastPoseVerificationAt >=
-        POSE_VERIFICATION_INTERVAL_MS;
+      scanArea.kind === "full" &&
+      performance.now() - state.lastPoseVerificationAt >= poseInterval;
     const now = performance.now();
     const poseDetections = needsPoseVerification
       ? safelyDetectPoses(frame, scanArea)

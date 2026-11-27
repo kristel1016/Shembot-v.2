@@ -153,6 +153,7 @@ assert.match(app, /function canReacquireMovingTrack/);
 assert.match(app, /function isTrackVisible/);
 assert.match(app, /state\.tracks\.filter\(\(track\) => isTrackVisible\(track, startedAt\)\)/);
 assert.match(app, /allowStandalonePoses:\s*needsPoseVerification/);
+assert.match(app, /scanArea\.kind === "full" &&\s*performance\.now\(\) - state\.lastPoseVerificationAt/);
 assert.match(app, /velocityX/);
 assert.match(app, /lastSupportedAt/);
 assert.match(app, /const reliableTrack/);
@@ -436,8 +437,8 @@ const poseConfirmedPerson = { ...secondPerson, verifiedByPose: true, strongPoseE
 assert.equal(tracker.updateTracks([
   secondPerson, closePerson, tileDuplicate,
   { ...poseConfirmedPerson, poseVerifiedFromCache: true },
-  { ...poseConfirmedPerson, standalonePose: true },
-], 50, early).length, 0, "uncertain, edge, tile, and unmatched pose boxes must wait for fusion");
+  { ...poseConfirmedPerson, score: 0.22, strongPoseEvidence: false },
+], 50, early).length, 0, "uncertain, edge, tile, and weak pose boxes must wait for fusion");
 assert.equal(trackerState.tracks.length, 0);
 const beforeTile = tracker.updateTracks([foreground, { ...foreground }], 100, early);
 tracker.publishLiveTracks(beforeTile);
@@ -457,6 +458,14 @@ assert.equal(poseConfirmedTrack.id, tentativeId,
   "a strong current pose can confirm a pending detector track before the tile");
 assert.equal(tracker.updateTracks([poseConfirmedPerson], 160)[0].confirmationHits, 2,
   "confirming a pending track must also count only one hit per scan cycle");
+
+trackerState.tracks = [];
+const weakPose = { ...poseConfirmedPerson, score: 0.25, strongPoseEvidence: false };
+assert.equal(tracker.updateTracks([weakPose], 50).length, 0,
+  "a weak pose match should not confirm a low-confidence background box");
+const freshStandalonePose = { ...poseConfirmedPerson, standalonePose: true };
+assert.equal(tracker.updateTracks([freshStandalonePose], 100, early).length, 1,
+  "a fresh full-frame pose with strong anatomy counts even without a detector box");
 
 trackerState.tracks = [];
 assert.equal(tracker.updateTracks([closePerson], 100).length, 0,
