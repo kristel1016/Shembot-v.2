@@ -391,11 +391,14 @@ const published = { count: 0, tracked: 0, boxes: [], historyCount: 0 };
 const tracker = runInNewContext(`
   ${app.slice(app.indexOf("const TRACK_HOLD_MS"), app.indexOf("const IMAGE_PROPOSAL_SCORE_FLOOR"))}
   ${app.slice(app.indexOf("function intersectionOverUnion"), app.indexOf("function drawArea"))}
-  ({ updateTracks, isTrackVisible, publishLiveTracks, updateFlowTracking })
+  ({ attachPoseEvidence, updateTracks, isTrackVisible, publishLiveTracks, updateFlowTracking })
 `, {
   state: trackerState,
   elements: { overlay: { width: 1400, height: 700 } },
   clamp: (value, min, max) => Math.max(min, Math.min(max, value)),
+  POSE_VERIFICATION_INTERVAL_MS: 420,
+  LIVE_UNSUPPORTED_POSE_MIN_HEIGHT: 0.25,
+  FAST_TRACK_MIN_BRIGHTNESS: 64,
   haveDistinctPoseIdentities,
   areOppositeSplitPairMembers,
   looksLikeSamePersonAcrossScales,
@@ -446,6 +449,19 @@ assert.equal(tracker.updateTracks([weakMovingPerson], 3400).length, 0,
 trackerState.tracks = [];
 const closePerson = { ...foreground, bbox: [560, 30, 635, 670], score: 0.91, atLargeFrameEdge: true };
 const early = { earlyFullFrame: true };
+const livePoseFrame = { sourceWidth: 1400, sourceHeight: 700, crop: { height: 700 } };
+const shortPose = { bbox: [350, 100, 80, 150], score: 0.81, strongStandalonePose: true };
+assert.equal(tracker.attachPoseEvidence([], [shortPose], livePoseFrame, { live: true }).length, 0,
+  "small background poses need detector corroboration in live video");
+assert.equal(tracker.attachPoseEvidence([], [shortPose], livePoseFrame).length, 1,
+  "the live-video guard does not change uploaded-image pose handling");
+for (const [score, corroborated] of [[0.31, false], [0.62, true]]) {
+  const [candidate] = tracker.attachPoseEvidence([{ bbox: shortPose.bbox, score }], [shortPose], livePoseFrame, { live: true });
+  assert.equal(candidate.strongPoseEvidence, corroborated,
+    "a short pose can contribute when its matching detector score is strong");
+}
+const tallPose = { ...shortPose, bbox: [350, 100, 180, 370] };
+assert.equal(tracker.attachPoseEvidence([], [tallPose], livePoseFrame, { live: true }).length, 1);
 const tileDuplicate = { ...foreground, fromFullScan: false };
 const poseConfirmedPerson = { ...secondPerson, verifiedByPose: true, strongPoseEvidence: true };
 assert.equal(tracker.updateTracks([
@@ -480,6 +496,21 @@ assert.equal(tracker.updateTracks([weakPose], 50).length, 0,
 const freshStandalonePose = { ...poseConfirmedPerson, standalonePose: true };
 assert.equal(tracker.updateTracks([freshStandalonePose], 100, early).length, 1,
   "a fresh full-frame pose with strong anatomy counts even without a detector box");
+const [initialTrack] = tracker.updateTracks([freshStandalonePose], 160);
+const movedPose = { ...freshStandalonePose, bbox: [186, 208, 180, 440] };
+assert.equal(tracker.updateTracks([movedPose], 200, early)[0].lastSeen, 100,
+  "conservative tracking holds an established box until the tile can confirm the match");
+const fastEarly = { ...early, fastTracking: true };
+const [movedTrack] = tracker.updateTracks([movedPose], 250, fastEarly);
+assert.equal(movedTrack.id, initialTrack.id);
+assert.equal(movedTrack.lastSeen, 250, "a verified match updates the same box before the tile");
+assert.ok(movedTrack.bbox[0] >= 180, "fresh pose geometry receives most of the smoothing weight");
+assert.equal(tracker.updateTracks([movedPose], 300)[0].hits, 2,
+  "the tile must not count the early refresh a second time");
+const nearbyWeak = { ...movedPose, score: 0.3, verifiedByPose: false, bbox: [195, 208, 180, 440] };
+const unrelatedWeak = { ...nearbyWeak, bbox: [900, 208, 180, 440] };
+assert.equal(tracker.updateTracks([nearbyWeak, unrelatedWeak], 350, fastEarly)[0].lastSeen, 350);
+assert.equal(trackerState.tracks.length, 1, "an unrelated weak box cannot create a second track");
 
 trackerState.tracks = [];
 assert.equal(tracker.updateTracks([closePerson], 100).length, 0,
@@ -507,6 +538,24 @@ const movingOut = {
 assert.equal(tracker.isTrackVisible(movingOut, 2250), true);
 assert.equal(tracker.isTrackVisible(movingOut, 2400), false,
   "a person moving out of the frame gets a shorter hold");
+trackerState.sceneBrightness = 165;
+const edgeFragment = { ...foreground, bbox: [1190, 170, 185, 295], score: 0.81 };
+trackerState.tracks = [];
+tracker.publishLiveTracks(tracker.updateTracks([edgeFragment], 100));
+const [edgeTrack] = trackerState.tracks;
+const heldEdgeTrack = { ...edgeTrack };
+const continuingPose = { ...freshStandalonePose, bbox: [932, 175, 292, 510] };
+const [inwardTrack] = tracker.updateTracks([continuingPose], 300, fastEarly);
+assert.equal(inwardTrack.id, edgeTrack.id, "a nearby expanding full pose keeps the track from the edge");
+assert.equal(trackerState.tracks.length, 1);
+assert.equal(tracker.isTrackVisible(heldEdgeTrack, 500), false, "a stale edge fragment clears promptly");
+tracker.updateTracks([continuingPose], 330, { fastTracking: true });
+tracker.publishLiveTracks(tracker.updateTracks([continuingPose], 380, { fastTracking: true }));
+const departingPose = { ...continuingPose, bbox: [1210, 180, 100, 490] };
+const departure = tracker.updateTracks([departingPose], 490, fastEarly);
+assert.equal(departure.length, 1, "an outgoing edge fragment is still the same person");
+assert.equal(departure[0].id, edgeTrack.id);
+trackerState.sceneBrightness = null;
 
 Object.assign(trackerState, {
   flowEnabled: true, rightIsEntry: true, flowLinePosition: 0.5, entered: 0, exited: 0,

@@ -49,6 +49,9 @@ const IMAGE_UNSUPPORTED_SCORE_FLOOR = 0.42;
 const FULL_FRAME_SCORE_FLOOR = 0.3;
 const POSE_VERIFICATION_INTERVAL_MS = 420;
 const POSE_ACQUISITION_INTERVAL_MS = 250;
+const POSE_PROPOSAL_INTERVAL_MS = 150;
+const LIVE_UNSUPPORTED_POSE_MIN_HEIGHT = 0.25;
+const FAST_TRACK_MIN_BRIGHTNESS = 64;
 const POSE_CACHE_MS = 650;
 const MAX_POSES = 30;
 const ORIENTATION_SAMPLES = 2;
@@ -278,6 +281,7 @@ const state = {
   currentCapacityStatus: "safe",
   session: createEmptySession(),
   lastQualityAt: -Infinity,
+  sceneBrightness: null,
   quality: { code: "waiting", label: "Waiting for camera" },
   flowEnabled: localStorage.getItem("flowEnabled") === "true",
   flowLinePosition: clampStoredNumber(
@@ -1741,6 +1745,8 @@ function resetTracking() {
   state.scanDetections = [];
   state.lastPoseVerificationAt = -Infinity;
   state.lastPoseDetections = [];
+  state.lastQualityAt = -Infinity;
+  state.sceneBrightness = null;
   updatePipelineDiagnostics({
     raw: 0,
     plausible: 0,
@@ -1983,6 +1989,7 @@ function analyzeFrameQuality(now) {
     }
 
     const brightness = total / Math.max(1, samples);
+    state.sceneBrightness = brightness;
     const contrast = Math.sqrt(
       Math.max(0, totalSquared / Math.max(1, samples) - brightness * brightness),
     );
@@ -2550,6 +2557,7 @@ function attachPoseEvidence(
     allowStandalonePoses = true,
     allowRecoverablePoses = false,
     useCachedPoses = false,
+    live = false,
     poseBatch,
   } = {},
 ) {
@@ -2597,6 +2605,7 @@ function attachPoseEvidence(
   );
 
   for (const pose of uniquePoses) {
+    const smallLivePose = live && pose.bbox[3] < frame.crop.height * LIVE_UNSUPPORTED_POSE_MIN_HEIGHT;
     const poseSpansRecoveredPair = recoveredSplitPairs.some((pair) => {
       const containsBothCenters = pair.every((person) =>
         centerIsInside(person.bbox, pose.bbox)
@@ -2624,7 +2633,7 @@ function attachPoseEvidence(
       const canRecoverMissingPerson =
         pose.strongStandalonePose ||
         (allowRecoverablePoses && pose.recoverableImagePose);
-      if (allowStandalonePoses && canRecoverMissingPerson) {
+      if (allowStandalonePoses && canRecoverMissingPerson && !smallLivePose) {
         candidates.push({
           bbox: [...pose.bbox],
           score: pose.score,
@@ -2663,7 +2672,9 @@ function attachPoseEvidence(
     });
     matchingIndexes.forEach((index) => {
       const detection = candidates[index];
-      const poseBox = mergeDetectionWithPoseBox(detection, pose, frame);
+      const poseBox = live && pose.strongStandalonePose && !useCachedPoses
+        ? pose.bbox
+        : mergeDetectionWithPoseBox(detection, pose, frame);
       // A pose can span neighboring people in a crowded photo. Keep an
       // individual box when a pose would widen it considerably.
       const mergedBox = useCachedPoses || (
@@ -2678,7 +2689,8 @@ function attachPoseEvidence(
         poseScore: pose.score,
         poseId: pose.poseId,
         poseBatch,
-        strongPoseEvidence: pose.strongStandalonePose,
+        strongPoseEvidence: pose.strongStandalonePose &&
+          (!smallLivePose || detection.score >= DETECTOR_ONLY_SCORE_FLOOR),
         poseVerifiedFromCache: useCachedPoses,
         relativeScanArea: boxArea(mergedBox) /
           Math.max(1, frame.sourceWidth * frame.sourceHeight),
@@ -2802,14 +2814,13 @@ function consolidateDetections(detections, {
   });
 }
 
-function smoothBox(previous, next) {
-  const newWeight = 0.68;
+function smoothBox(previous, next, newWeight = 0.68) {
   return previous.map(
     (value, index) => value * (1 - newWeight) + next[index] * newWeight,
   );
 }
 
-function stabilizeTrackedBox(track, detection) {
+function stabilizeTrackedBox(track, detection, fastTracking) {
   const previous = track.bbox;
   const next = detection.bbox;
   const previousArea = boxArea(previous);
@@ -2818,7 +2829,9 @@ function stabilizeTrackedBox(track, detection) {
     track.confirmed &&
     nextArea < previousArea * 0.58 &&
     intersectionOverSmaller(previous, next) >= 0.72;
-  if (!partialBodyReplacement) return smoothBox(previous, next);
+  if (!partialBodyReplacement) {
+    return smoothBox(previous, next, fastTracking && hasLivePoseEvidence(detection) ? 0.90 : 0.68);
+  }
 
   // Keep the established person-sized rectangle when a later scan sees only
   // a face, arm, or torso. Follow the center gently without shrinking.
@@ -2880,6 +2893,43 @@ function canConfirmOnFullFrame(detection) {
     (!detection.atLargeFrameEdge && !detection.clippedByLiveTile &&
       detection.score >= DETECTOR_ONLY_INSTANT_SCORE)
   );
+}
+
+function canRefreshTrackOnFullFrame(track, detection, now) {
+  if (!track.confirmed || !detection.fromFullScan || detection.edgeCropped) return false;
+  const match = boxMatchScore(track.bbox, detection.bbox);
+  if (hasLivePoseEvidence(detection)) return match >= 0.36;
+  return track.poseHits > 0 && now - track.lastSupportedAt <= POSE_VERIFICATION_INTERVAL_MS &&
+    match >= 0.55;
+}
+
+function matchSideEdgeTrack(track, detection, now) {
+  if (!track.confirmed || !hasLivePoseEvidence(detection) ||
+    now - track.lastSeen > POSE_VERIFICATION_INTERVAL_MS) return 0;
+  const [x, y, width, height] = track.bbox;
+  const [nextX, nextY, nextWidth, nextHeight] = detection.bbox;
+  const frameWidth = elements.overlay.width;
+  const growth = nextHeight / height;
+  const centerX = x + width / 2;
+  const nextCenterX = nextX + nextWidth / 2;
+  const movesInward = (centerX < frameWidth * 0.12 && nextCenterX > centerX) ||
+    (centerX > frameWidth * 0.88 && nextCenterX < centerX);
+  const movesOutward = (nextCenterX < frameWidth * 0.12 && nextCenterX < centerX) ||
+    (nextCenterX > frameWidth * 0.88 && nextCenterX > centerX);
+  const verticalOverlap = Math.min(y + height, nextY + nextHeight) - Math.max(y, nextY);
+  const horizontalTravel = Math.abs(nextCenterX - centerX);
+  if (movesInward && growth >= 1.35 && growth <= 2.2 &&
+    verticalOverlap >= height * 0.65 && horizontalTravel <= nextWidth * 0.72) return 0.34;
+  if (movesOutward && nextWidth <= width * 0.6 && growth >= 0.55 && growth <= 1.25 &&
+    verticalOverlap >= nextHeight * 0.65 && horizontalTravel <= width * 0.72) return 0.34;
+  return 0;
+}
+
+function overlapsConfirmedTrack(detection, now) {
+  return state.tracks.some((track) => track.confirmed && now - track.lastSeen <= TRACK_HOLD_MS && (
+    motionAwareTrackMatchScore(track, detection, now) > 0.17 ||
+    looksLikeSamePersonAcrossScales(track, detection)
+  ));
 }
 
 function motionAwareTrackMatchScore(track, detection, now) {
@@ -2944,12 +2994,15 @@ function isTrackVisible(track, now) {
   const centerY = y / sourceHeight;
   const velocityX = (track.velocityX || 0) / sourceWidth;
   const velocityY = (track.velocityY || 0) / sourceHeight;
+  const atSideEdge = centerX < 0.12 || centerX > 0.88;
   const leavingFrame =
     (centerX < 0.12 && velocityX < -0.00008) ||
     (centerX > 0.88 && velocityX > 0.00008) ||
     (centerY < 0.12 && velocityY < -0.00008) ||
     (centerY > 0.88 && velocityY > 0.00008);
-  if (leavingFrame) return now - track.lastSeen <= EXIT_DISPLAY_TRACK_HOLD_MS;
+  if (leavingFrame || (atSideEdge && state.sceneBrightness >= FAST_TRACK_MIN_BRIGHTNESS)) {
+    return now - track.lastSeen <= EXIT_DISPLAY_TRACK_HOLD_MS;
+  }
 
   // Use elapsed time so the same miss looks similar at phone and desktop
   // scan rates. Keep verified, steady people briefly through detector gaps.
@@ -2971,25 +3024,23 @@ function nextAvailableTrackId() {
   return id;
 }
 
-function updateTracks(detections, now, { earlyFullFrame = false } = {}) {
+function updateTracks(detections, now, { earlyFullFrame = false, fastTracking = false } = {}) {
   const unmatchedTracks = new Set(state.tracks.map((track) => track.id));
   // Match supported detections before trying to recover missing tracks from
   // weak boxes. A weak box can only update its own unmatched confirmed track.
   const orderedDetections = [...detections].sort((first, second) =>
+    (fastTracking ? Number(hasLivePoseEvidence(second)) - Number(hasLivePoseEvidence(first)) : 0) ||
     Number(hasLiveTrackEvidence(second)) - Number(hasLiveTrackEvidence(first))
   );
+  const singlePersonAtEdge = fastTracking && state.lastConfirmedTracks.length === 1 &&
+    orderedDetections.filter(hasLiveTrackEvidence).length === 1;
 
   for (const detection of orderedDetections) {
     const hasEvidence = hasLiveTrackEvidence(detection);
-    // Only confirm a new person on the full-frame pass. Confirmed tracks and
-    // uncertain detections use the combined full-frame/tile result.
-    if (earlyFullFrame && (
-      !canConfirmOnFullFrame(detection) ||
-      state.tracks.some((track) => track.confirmed && now - track.lastSeen <= TRACK_HOLD_MS && (
-        motionAwareTrackMatchScore(track, detection, now) > 0.17 ||
-        looksLikeSamePersonAcrossScales(track, detection)
-      ))
-    )) continue;
+    const canConfirmEarly = earlyFullFrame && canConfirmOnFullFrame(detection);
+    if (earlyFullFrame && !fastTracking && (!canConfirmEarly || overlapsConfirmedTrack(detection, now))) {
+      continue;
+    }
 
     let bestTrack = null;
     let bestScore = 0.17;
@@ -2997,7 +3048,13 @@ function updateTracks(detections, now, { earlyFullFrame = false } = {}) {
     for (const track of state.tracks) {
       if (!unmatchedTracks.has(track.id) || now - track.lastSeen > TRACK_HOLD_MS) continue;
       if (!hasEvidence && !canReacquireMovingTrack(track, detection, now)) continue;
-      const score = motionAwareTrackMatchScore(track, detection, now);
+      const edgeMatch = singlePersonAtEdge ? matchSideEdgeTrack(track, detection, now) : 0;
+      if (earlyFullFrame && (track.confirmed || !canConfirmEarly)) {
+        // A weak full-frame box can only move an established track if it
+        // closely matches the most recent verified location and size.
+        if (!fastTracking || (!edgeMatch && !canRefreshTrackOnFullFrame(track, detection, now))) continue;
+      }
+      const score = Math.max(edgeMatch, motionAwareTrackMatchScore(track, detection, now));
       if (score > bestScore) {
         bestTrack = track;
         bestScore = score;
@@ -3020,7 +3077,7 @@ function updateTracks(detections, now, { earlyFullFrame = false } = {}) {
         measuredVelocityX * 0.45;
       bestTrack.velocityY = (bestTrack.velocityY || 0) * 0.55 +
         measuredVelocityY * 0.45;
-      bestTrack.bbox = stabilizeTrackedBox(bestTrack, detection);
+      bestTrack.bbox = stabilizeTrackedBox(bestTrack, detection, fastTracking);
       bestTrack.score = detection.score;
       bestTrack.hits += 1;
       if (hasEvidence) {
@@ -3036,13 +3093,16 @@ function updateTracks(detections, now, { earlyFullFrame = false } = {}) {
       bestTrack.lastSeen = now;
       bestTrack.fromFullScan = detection.fromFullScan;
       const requiredHits = bestTrack.maxScore >= DETECTOR_ONLY_FAST_SCORE ? 2 : 3;
-      if (earlyFullFrame || freshPose || bestTrack.confirmationHits >= requiredHits) {
+      if (canConfirmEarly || freshPose || bestTrack.confirmationHits >= requiredHits) {
         bestTrack.confirmed = true;
       }
       bestTrack.confirmedEarly = earlyFullFrame;
       unmatchedTracks.delete(bestTrack.id);
     } else {
       if (!hasEvidence) continue;
+      if (earlyFullFrame && fastTracking && (!canConfirmEarly || overlapsConfirmedTrack(detection, now))) {
+        continue;
+      }
       const duplicateOfMatchedTrack = state.tracks.some((track) =>
         !unmatchedTracks.has(track.id) &&
         duplicatesAlreadyMatchedTrack(track, detection, now)
@@ -3418,10 +3478,13 @@ function detectLoop(token) {
         };
       });
 
+    const fastTracking = state.sceneBrightness >= FAST_TRACK_MIN_BRIGHTNESS;
     const poseWasAvailable = Boolean(state.poseLandmarker);
-    const poseInterval = state.lastConfirmedTracks.length === 0
-      ? POSE_ACQUISITION_INTERVAL_MS
-      : POSE_VERIFICATION_INTERVAL_MS;
+    const poseInterval = state.lastConfirmedTracks.length > 0
+      ? POSE_VERIFICATION_INTERVAL_MS
+      : fastTracking && people.some((person) => person.score >= 0.24 && person.relativeScanArea >= 0.04)
+        ? POSE_PROPOSAL_INTERVAL_MS
+        : POSE_ACQUISITION_INTERVAL_MS;
     const needsPoseVerification =
       poseWasAvailable &&
       scanArea.kind === "full" &&
@@ -3443,6 +3506,7 @@ function detectLoop(token) {
         // box from remaining after someone has left the frame.
         allowStandalonePoses: needsPoseVerification,
         useCachedPoses: !needsPoseVerification,
+        live: fastTracking,
         poseBatch: state.lastPoseVerificationAt,
       })
       : people.map((detection) => ({
@@ -3474,18 +3538,18 @@ function detectLoop(token) {
       });
       state.scanDetections = [];
       if (scanArea.kind === "tile") state.tileIndex = (state.tileIndex + 1) % 4;
-      confirmedTracks = updateTracks(fusedDetections, startedAt);
-    } else if (countCandidates.some(canConfirmOnFullFrame)) {
+      confirmedTracks = updateTracks(fusedDetections, startedAt, { fastTracking });
+    } else if (fastTracking ? countCandidates.length > 0 : countCandidates.some(canConfirmOnFullFrame)) {
       const fullFrameDetections = consolidateDetections(countCandidates, {
         liveDetections: true,
       });
-      confirmedTracks = updateTracks(fullFrameDetections, startedAt, { earlyFullFrame: true });
+      confirmedTracks = updateTracks(fullFrameDetections, startedAt, { earlyFullFrame: true, fastTracking });
     } else {
       confirmedTracks = state.tracks.filter((track) => isTrackVisible(track, startedAt));
     }
 
     publishLiveTracks(confirmedTracks, scanCycleComplete);
-    if (scanCycleComplete) updateFlowTracking(confirmedTracks, startedAt);
+    if (scanCycleComplete || fastTracking) updateFlowTracking(confirmedTracks, startedAt);
 
     const inferenceFps = 1000 / Math.max(1, performance.now() - startedAt);
     state.fpsHistory.push(inferenceFps);
